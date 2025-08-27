@@ -108,8 +108,11 @@ async def get_context(request: Request):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from src.DBFeeder import backupDB
     initizalizedEngine = await RunOnceAndReturnSessionMaker()
     yield
+    await backupDB(initizalizedEngine)
+    # print("App shutdown, nothing to do")
 
 app = FastAPI(lifespan=lifespan)
 

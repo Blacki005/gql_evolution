@@ -35,8 +35,6 @@ def UUIDColumn(**kwargs):
 
 IDType = uuid.UUID
 
-import dataclasses
-
 class BaseModel(MappedAsDataclass, DeclarativeBase):
     id: Mapped[IDType] = UUIDColumn(index=True, primary_key=True, default_factory=uuid.uuid4)
 
