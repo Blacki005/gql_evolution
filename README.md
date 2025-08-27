@@ -218,8 +218,12 @@ logging.basicConfig(format='%(asctime)s\t%(levelname)s:\t%(message)s', level=log
 The entity from other federation member (`UserGQLModel`) has been extended and entity `EventGQLModel` has method which returns a `List[UserGQLModel]`.
 
 
-```
+```bash
 uvicorn main:app --reload
+```
+
+```bash
+uvicorn main:app --env-file environment.txt --port 8001
 ```
 
 The query bellow returns a link to other federation members

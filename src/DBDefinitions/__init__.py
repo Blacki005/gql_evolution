@@ -6,9 +6,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from .baseDBModel import BaseModel
-from .eventDBModel import EventModel
-from .eventuserDBModel import EventUserModel
+from .BaseModel import BaseModel
+from .EventDBModel import EventModel
+from .EventInvitationModel import EventInvitationModel
 
 async def startEngine(connectionstring, makeDrop=False, makeUp=True):
     """Provede nezbytne ukony a vrati asynchronni SessionMaker"""
@@ -17,13 +17,14 @@ async def startEngine(connectionstring, makeDrop=False, makeUp=True):
     async with asyncEngine.begin() as conn:
         if makeDrop:
             await conn.run_sync(BaseModel.metadata.drop_all)
-            logging.info("BaseModel.metadata.drop_all finished")
+            print("BaseModel.metadata.drop_all finished")
         if makeUp:
             try:
                 await conn.run_sync(BaseModel.metadata.create_all)
-                logging.info("BaseModel.metadata.create_all finished")
+                print("BaseModel.metadata.create_all finished")
             except sqlalchemy.exc.NoReferencedTableError as e:
-                logging.info(f"{e} : Unable automaticaly create tables")
+                print(e)
+                print("Unable automaticaly create tables")
                 return None
 
     async_sessionMaker = sessionmaker(
@@ -31,28 +32,19 @@ async def startEngine(connectionstring, makeDrop=False, makeUp=True):
     )
     return async_sessionMaker
 
-
 import os
-
 
 def ComposeConnectionString():
     """Odvozuje connectionString z promennych prostredi (nebo z Docker Envs, coz je fakticky totez).
     Lze predelat na napr. konfiguracni file.
     """
-    sqlite_connectionstring = "file:sqlite.db?mode=rwc"
-    if os.environ.get("POSTGRES_USER", None) is not None:
-        user = os.environ.get("POSTGRES_USER", "postgres")
-        password = os.environ.get("POSTGRES_PASSWORD", "example")
-        database = os.environ.get("POSTGRES_DB", "data")
-        hostWithPort = os.environ.get("POSTGRES_HOST", "localhost:5432")
+    user = os.environ.get("POSTGRES_USER", "postgres")
+    password = os.environ.get("POSTGRES_PASSWORD", "example")
+    database = os.environ.get("POSTGRES_DB", "data")
+    hostWithPort = os.environ.get("POSTGRES_HOST", "localhost:5432")
 
-        driver = "postgresql+asyncpg"  # "postgresql+psycopg2"
-        
-        connectionstring = f"{driver}://{user}:{password}@{hostWithPort}/{database}"
-    else:
-        connectionstring = sqlite_connectionstring
-
+    driver = "postgresql+asyncpg"  # "postgresql+psycopg2"
+    connectionstring = f"{driver}://{user}:{password}@{hostWithPort}/{database}"
     connectionstring = os.environ.get("CONNECTION_STRING", connectionstring)
-    
-    logging.info(f"CString {database} at {hostWithPort}")
+
     return connectionstring

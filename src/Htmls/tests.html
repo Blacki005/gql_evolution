@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GraphQL Page Field Tester</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+<div class="container py-4">
+    <h2>GraphQL Page Field Tester</h2>
+    <button class="btn btn-primary mb-3" onclick="runTests()">Run Tests</button>
+    <div id="results" class="accordion"></div>
+</div>
+
+<script>
+const GRAPHQL_ENDPOINT = '/gql';
+
+const introspectionQuery = `
+query IntrospectionQuery {
+  __schema {
+    queryType { name }
+    mutationType { name }
+    types {
+      name
+      description
+      kind
+      fields {
+        name
+        description
+        args {
+          name
+          description
+          type {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
+        }
+        type {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+              }
+            }
+          }
+        }
+      }
+      inputFields {
+        name
+        description
+        type {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+            }
+          }
+        }
+      }
+      possibleTypes {
+        name
+        kind
+      }
+    }
+  }
+}`;
+
+async function fetchGraphQL(query) {
+    const response = await fetch(GRAPHQL_ENDPOINT, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query})
+    });
+    return response.json();
+}
+
+function buildSelection(schema, fieldType, master) {
+    const kind = fieldType?.kind
+    if (kind) {
+        if (fieldType.kind === 'SCALAR') return '';
+        if (fieldType.kind === 'OBJECT') return '{ __typename id }';
+        if (fieldType.kind === 'LIST') return buildSelection(schema, fieldType.ofType, fieldType);
+        if (fieldType.kind === 'NON_NULL') return buildSelection(schema, fieldType.ofType, fieldType);
+        if (fieldType.kind === 'UNION') {
+            const typeDetails = schema.types.find(t => t.name === fieldType.name);
+            const possibleTypes = typeDetails.possibleTypes
+            console.log(fieldType)    
+            console.log(typeDetails)    
+            return '{ __typename }'
+            // return buildSelection(schema, typeDetails, fieldType)
+        };
+    }
+    console.log(master)    
+    console.log(fieldType)    
+    return '';
+}
+
+async function runTests() {
+    const introspection = await fetchGraphQL(introspectionQuery);
+    const data = introspection.data
+    const schema = data.__schema
+
+    const queryType = schema.types.find(t => t.name === schema.queryType.name);
+    const fields = queryType.fields.filter(f => f.name.endsWith('Page'));
+
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.innerHTML = '';
+
+    for (const [index, field] of fields.entries()) {
+        let introspectionType = field.type.kind === 'NON_NULL' ? field.type.ofType : field.type;
+        introspectionType = introspectionType.kind === 'LIST' ? introspectionType.ofType : introspectionType;
+        introspectionType = introspectionType.kind === 'NON_NULL' ? introspectionType.ofType : introspectionType;
+
+        const typeDetails = schema.types.find(t => t.name === introspectionType.name);
+
+        if (!typeDetails || !typeDetails.fields) {
+            resultsDiv.innerHTML += `<div class="alert alert-warning">No fields found for type: ${introspectionType.name}</div>`;
+            continue;
+        }
+
+        const innerFields = typeDetails.fields;
+        let selectionParts = [];
+
+        innerFields.forEach(innerField => {
+            if (!['__typename', 'id'].includes(innerField.name)) {
+                const selection = buildSelection(schema, innerField.type);
+                selectionParts.push(selection ? `${innerField.name} ${selection}` : innerField.name);
+            }
+        });
+
+        for (let i = 1; i <= selectionParts.length; i++) {
+            const partialSelection = selectionParts.slice(0, i).join('\n                ');
+            const query = `{
+              ${field.name} {
+                __typename
+                id
+                ${partialSelection}
+              }
+            }`;
+
+            const result = await fetchGraphQL(query);
+            const isError = result.errors;
+
+            if (isError) {
+                resultsDiv.innerHTML += `
+                <div class="card mb-3">
+                  <div class="card-header bg-danger text-white">
+                    <strong>${field.name} - Error on field: ${selectionParts[i-1]}</strong>
+                    <button class="btn btn-sm btn-light float-end" data-bs-toggle="collapse" data-bs-target="#collapse${index}">
+                      Hide
+                    </button>
+                  </div>
+                  <div id="collapse${index}" class="collapse show">
+                    <div class="card-body">
+                      <pre>${query}</pre>
+                    </div>
+                    <div class="card-footer">
+                      <pre>${JSON.stringify(result, null, 2)}</pre>
+                    </div>
+                  </div>
+                </div>`;
+                break;
+            }
+
+            if (i === selectionParts.length) {
+                resultsDiv.innerHTML += `
+                <div class="card mb-3">
+                  <div class="card-header bg-success text-white">
+                    <strong>${field.name}</strong>
+                    <button class="btn btn-sm btn-light float-end" data-bs-toggle="collapse" data-bs-target="#collapse${index}">
+                      Show
+                    </button>
+                  </div>
+                  <div id="collapse${index}" class="collapse">
+                    <div class="card-body">
+                      <pre>${query}</pre>
+                    </div>
+                    <div class="card-footer">
+                      <pre>${JSON.stringify(result, null, 2)}</pre>
+                    </div>
+                  </div>
+                </div>`;
+            }
+        }
+    }
+}
+</script>
+</body>
+</html>
