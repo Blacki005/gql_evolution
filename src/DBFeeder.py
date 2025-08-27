@@ -35,7 +35,6 @@ async def backupDB(asyncSessionMaker, filename="./systemdata.backup.json"):
     import json
     from src.DBDefinitions.BaseModel import IDType
 
-
     dbModels = [
         EventModel, 
         EventInvitationModel,
@@ -55,6 +54,7 @@ async def backupDB(asyncSessionMaker, filename="./systemdata.backup.json"):
                 rowsdict[id] = asdict
             # vsechny primarní klice do ids
             ids = set(rowsdict.keys())
+            todo = set()
             done = set()
             chunk_id = 0
             while len(done) < len(ids):
@@ -68,8 +68,10 @@ async def backupDB(asyncSessionMaker, filename="./systemdata.backup.json"):
                                 if value not in done: continue
                             # primarni klic je zpracovatelny, nemame zavislost na nezpracovanych klicich
                     row["_chunk"] = chunk_id
-                    done.add(id)
+                    todo.add(id)
                 print(f"Chunk {chunk_id} done {len(done)}/{len(ids)}")
+                done = done.union(todo)
+                todo = set()
                 chunk_id += 1
             data.append({
                 model.__tablename__: list(rowsdict.values())
