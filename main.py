@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
     finally:
         # await core.shutdown()
         pass
-    await backupDB(initizalizedEngine)
+    # await backupDB(initizalizedEngine)
     
     # print("App shutdown, nothing to do")
 

@@ -61,12 +61,16 @@ async def backupDB(asyncSessionMaker, filename="./systemdata.backup.json"):
                 for row in rowsdict.values():
                     id = row.get("id", None)
                     if id in done: continue
+                    skip_this_id = False
                     for key, value in asdict.items():
                         if isinstance(value, IDType):
                             if value is None: continue
                             if value in ids:
-                                if value not in done: continue
+                                if value not in done: 
+                                    skip_this_id = True
+                                    continue
                             # primarni klic je zpracovatelny, nemame zavislost na nezpracovanych klicich
+                    if skip_this_id: continue
                     row["_chunk"] = chunk_id
                     todo.add(id)
                 print(f"Chunk {chunk_id} done {len(done)}/{len(ids)}")
