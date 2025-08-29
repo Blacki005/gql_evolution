@@ -264,8 +264,9 @@
     function generateVariableDefinitions(args, typesByName) {
       let varDefs = [];
       args.forEach(arg => {
+        // varDefs.push("\n")
         if (arg.name === "where") {
-          varDefs.push(`$${arg.name}: ${variableTypeString(arg.type)}`);
+          varDefs.push(`\n\t$${arg.name}: ${variableTypeString(arg.type)} # ${arg?.description}`);
         } else {
           let named = getNamedType(arg.type);
           if (named.kind === "INPUT_OBJECT") {
@@ -273,13 +274,13 @@
             if (inputDef && inputDef.inputFields) {
               inputDef.inputFields.forEach(field => {
                 // varDefs.push(`$${arg.name}_${field.name}: ${variableTypeString(field.type)}`);
-                varDefs.push(`$${field.name}: ${variableTypeString(field.type)}`);
+                varDefs.push(`\n\t$${field.name}: ${variableTypeString(field.type)} # ${arg?.description}`);
               });
             } else {
-              varDefs.push(`$${arg.name}: ${variableTypeString(arg.type)}`);
+              varDefs.push(`\n\t$${arg.name}: ${variableTypeString(arg.type)} # ${arg?.description}`);
             }
           } else {
-            varDefs.push(`$${arg.name}: ${variableTypeString(arg.type)}`);
+            varDefs.push(`\n\t$${arg.name}: ${variableTypeString(arg.type)} # ${arg?.description}`);
           }
         }
       });
@@ -289,7 +290,7 @@
       let parts = [];
       args.forEach(arg => {
         if (arg.name === "where") {
-          parts.push(`${arg.name}: $${arg.name}`);
+          parts.push(`\n\t${arg.name}: $${arg.name}`);
         } else {
           let named = getNamedType(arg.type);
           if (named.kind === "INPUT_OBJECT") {
@@ -297,19 +298,19 @@
             if (inputDef && inputDef.inputFields) {
               let fields = [];
               inputDef.inputFields.forEach(field => {
-                fields.push(`${field.name}: $${field.name}`);
+                fields.push(`\n\t${field.name}: $${field.name}`);
               });
               let objStr = "{" + fields.join(", ") + "}";
-              parts.push(`${arg.name}: ${objStr}`);
+              parts.push(`\n\t${arg.name}: ${objStr}`);
             } else {
-              parts.push(`${arg.name}: $${arg.name}`);
+              parts.push(`\n\t${arg.name}: $${arg.name}`);
             }
           } else {
-            parts.push(`${arg.name}: $${arg.name}`);
+            parts.push(`\n\t${arg.name}: $${arg.name}`);
           }
         }
       });
-      return parts.length > 0 ? "(" + parts.join(", ") + ")" : "";
+      return parts.length > 0 ? "(" + parts.join(", ") + "\n  )" : "";
     }
     function getFragmentName(typeName) {
       if (typeName.endsWith("GQLModelUpdateError")) {
@@ -402,7 +403,7 @@
             }
             fragmentLines.push(line);
           });
-          fragmentBody = "{\n" + fragmentLines.join("\n") + "\n" + indentStr.repeat(indentLevel - 1) + "}";
+          fragmentBody = "{\n" + fragmentLines.join("\n") + "\n" + indentStr.repeat(indentLevel-1) + "}";
         }
         const fragmentDef = `fragment ${getFragmentName(typeName)} on ${typeName} ${fragmentBody}`;
         fragments[typeName] = fragmentDef;
@@ -417,7 +418,7 @@
       const varDefs = generateVariableDefinitions(args, typesByName);
       let varDefsStr = "";
       if (varDefs.length > 0) {
-        varDefsStr = "(" + varDefs.join(", ") + ")";
+        varDefsStr = "(" + varDefs.join(", ") + "\n)";
       }
       const fieldArgs = generateFieldArguments(args, typesByName);
       let fragments = {};
@@ -520,7 +521,14 @@
     function generateSidebar() {
       const navDiv = document.getElementById("nav-links");
       navDiv.innerHTML = "";
-      const headings = document.querySelectorAll("#content h5[id]");
+
+      // querySelectorAll vrací NodeList → převedeme na pole
+      const headings = Array.from(document.querySelectorAll("#content h5[id]"));
+
+      // seřadíme podle textu vzestupně
+      headings.sort((a, b) => a.textContent.localeCompare(b.textContent));
+
+      // vygenerujeme odkazy
       headings.forEach(h => {
         const link = document.createElement("a");
         link.href = "#" + h.id;

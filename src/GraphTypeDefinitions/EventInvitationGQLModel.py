@@ -47,6 +47,13 @@ class EventInvitationInputFilter:
     user_id: IDType
     state_id: IDType
 
+    event: EventInputFilter = strawberry.field(description="""Event filter operators, 
+for field "event" the filters could be
+{"event": {"start_date": {"_ge": "2025-06-30T18:01:59"}}}
+{"event": {"end_date": {"_le": "2025-06-30T18:01:59"}}}
+{"event": {"_and": [{"start_date": {"_ge": "2025-06-30T18:01:59"}}, {"end_date": {"_le": "2025-06-30T18:01:59"}}]}}
+""")
+
 @strawberry.federation.type(
     keys=["id"], description="""Entity representing a Invitation to an Event and also presence of a user, invitation state and presence is managed by state"""
 )

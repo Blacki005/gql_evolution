@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
     finally:
         # await core.shutdown()
         pass
-    # await backupDB(initizalizedEngine)
+    await backupDB(initizalizedEngine)
     
     # print("App shutdown, nothing to do")
 
@@ -243,8 +243,8 @@ async def index_page():
         question = text.value
         text.value = ''
         with message_container:
-            ui.chat_message(text=question, name='You', sent=True)
-            response_message = ui.chat_message(name='Bot', sent=False)
+            ui.chat_message(text=question, name='You', sent=True).classes("no-tail")
+            response_message = ui.chat_message(name='Bot', sent=False).classes("no-tail")
         
         if question.strip() == "sdl":
             response = [
@@ -264,105 +264,11 @@ async def index_page():
             query = """
 query userPage($skip: Int, $limit: Int, $orderby: String, $where: UserInputWhereFilter) {
   userPage(skip: $skip, limit: $limit, orderby: $orderby, where: $where) {
-  ...User
-}
-}
-
-fragment RBACObject on RBACObjectGQLModel {
   __typename
-  id
-  roles { __typename }
-  currentUserRoles { __typename }
-  # userCanWithState
-  # userCanWithoutState
-  }
-
-fragment Membership on MembershipGQLModel {
-  __typename
-  id
-  lastchange
-  created
-  createdbyId
-  changedbyId
-  rbacobjectId
-  createdby { __typename }
-  changedby { __typename }
-  rbacobject { __typename }
-  userId
-  groupId
-  valid
-  startdate
-  enddate
-  user { __typename }
-  group { __typename }
-  }
-
-fragment Role on RoleGQLModel {
-  __typename
-  id
-  lastchange
-  created
-  createdbyId
-  changedbyId
-  rbacobjectId
-  createdby { __typename }
-  changedby { __typename }
-  rbacobject { __typename }
-  valid
-  deputy
-  startdate
-  enddate
-  roletypeId
-  userId
-  groupId
-  roletype { __typename }
-  user { __typename }
-  group { __typename }
-  }
-
-fragment Group on GroupGQLModel {
-  __typename
-  id
-  lastchange
-  created
-  createdbyId
-  changedbyId
-  rbacobjectId
-  createdby { __typename }
-  changedby { __typename }
-  rbacobject { __typename }
-  name
-  nameEn
-  email
-  abbreviation
-  startdate
-  enddate
-  grouptypeId
-  grouptype { __typename }
-  subgroups { __typename }
-  mastergroupId
-  mastergroup { __typename }
-  path
-  memberships { __typename }
-  roles { __typename }
-  valid
-  mastergroups { __typename }
-  rolesOn { __typename }
-  }
-
-fragment User on UserGQLModel {
-__typename
 id
 lastchange
 created
-createdbyId
-changedbyId
-rbacobjectId
-createdby { __typename }
-changedby { __typename }
-rbacobject {
-  ...RBACObject
-}
+
 name
 givenname
 middlename
@@ -372,24 +278,8 @@ surname
 valid
 startdate
 enddate
-typeId
-memberships {
-  ...Membership
-}
-roles {
-  ...Role
-}
-isThisMe
-rolesOn {
-  ...Role
-}
-gdpr
-fullname
-memberOf {
-  ...Group
 }
 }
-
 """
             result = explain_graphql_query(schema_ast, query)
             response = [
@@ -410,7 +300,7 @@ memberOf {
                             }
             ]
         for part in response:
-            await asyncio.sleep(1)
+            # await asyncio.sleep(1)
             if part["type"] == "text":
                 with response_message:
                     ui.html(part["content"])
@@ -422,7 +312,26 @@ memberOf {
         # text.value = ''
 
     ui.add_css(r'a:link, a:visited {color: inherit !important; text-decoration: none; font-weight: 500}')
-
+    # ui.add_css("""
+    # .q-chat-message--sent .q-message-container:before,
+    # .q-chat-message--received .q-message-container:before {
+    #     display: none !important;
+    # }
+    # """)
+    ui.add_css("""
+    .hide-zobacek:before {
+        display: none !important;
+    }
+    """)
+    ui.add_css("""
+.no-tail .q-message-text--sent:before,
+.no-tail .q-message-text--sent:after,
+.no-tail .q-message-text--received:before,
+.no-tail .q-message-text--received:after {
+    display: none !important;
+    content: none !important;
+}
+""")
     # the queries below are used to expand the contend down to the footer (content can then use flex-grow to expand)
     ui.query('.q-page').classes('flex')
     ui.query('.nicegui-content').classes('w-full')
@@ -430,11 +339,11 @@ memberOf {
     with ui.tabs().classes('w-full') as tabs:
         chat_tab = ui.tab('Chat')
         logs_tab = ui.tab('Logs')
-    with ui.tab_panels(tabs, value=chat_tab).classes('w-full max-w-2xl mx-auto flex-grow items-stretch'):
+    with ui.tab_panels(tabs, value=chat_tab).classes('w-full max-w-5xl mx-auto flex-grow items-stretch'): #.classes('w-full max-w-2xl mx-auto flex-grow items-stretch'):
         message_container = ui.tab_panel(chat_tab).classes('items-stretch')
         with message_container:
-            ui.chat_message(text="I have arrived", name='You', sent=True)
-            ui.chat_message(text="Hello! I'm your friendly bot. How can I assist you today?", name='Bot', sent=False)
+            ui.chat_message(text="I have arrived", name='You', sent=True).classes("no-tail")
+            ui.chat_message(text="Hello! I'm your friendly bot. How can I assist you today?", name='Bot', sent=False).classes("no-tail")
             ui.markdown("""
                         # My response
                         ```json
@@ -449,7 +358,7 @@ memberOf {
         with ui.tab_panel(logs_tab):
             log = ui.log().classes('w-full h-full') 
 
-    with ui.footer().classes('bg-silver'), ui.column().classes('w-full max-w-3xl mx-auto my-6'):
+    with ui.footer().classes("bg-gray-600"), ui.column().classes('w-full max-w-3xl mx-auto my-6'):
         with ui.row().classes('w-full no-wrap items-center'):
             placeholder = ("message" 
                 # if "OPENAI_API_KEY" != 'not-set' else \
@@ -468,3 +377,6 @@ nicegui.ui.run_with(
     tailwind=True,
     storage_secret="SUPER-SECRET")
 # endregion
+
+
+# v následujícím dotazu identifikuj datové entity, a podmínky, které mají splňovat. seznam datových entit (jejich odhadnuté názvy) uveď jako json list obsahující stringy - názvy seznam podmínek uveď jako json list obsahující dict např. {"name": {"_eq": "Pavel"}} pokud se jedná o podmínku v relaci, odpovídající dict je tento {"related_entity": {"attribute_name": {"_eq": "value"}}} v dict nikdy není použit klíč, který by sdružoval více názvů atributů dotaz: najdi mi všechny uživatele, kteří jsou členy katedry K209
