@@ -10,7 +10,7 @@ nicegui_app.add_middleware(SessionMiddleware, secret_key='SUPER-SECRET')
 from graphql import parse
 
 from src.GraphTypeDefinitions import schema
-from main_ai import ChatSession
+from main_ai import ChatSession, MCPRouter, RouterContext
 import fastmcp
 
 MCPURL = "http://localhost:8002/mcp"
@@ -242,6 +242,144 @@ def GraphQLData(
     return view
 
 
+from mcp.types import SamplingMessage, CreateMessageRequestParams
+
+def createOnSample(
+    chatSession: ChatSession,
+    onLog: typing.Callable[[str], None],
+    onMessage: typing.Callable[[str], typing.Awaitable[None]],
+    defaultParams: CreateMessageRequestParams = CreateMessageRequestParams(
+        messages=[],
+        maxTokens=1000
+    )
+):
+    """
+    Vytvoří callback onSampling(messages, params, context) pro sampling nad LLM.
+    - messages: List[SamplingMessage] (každý má content nebo content.text)
+    - params: CreateMessageRequestParams (očekává systemPrompt, temperature, max_tokens)
+    - onLog: sync logger (str) -> None
+    - onMessage: async notifier (str) -> Awaitable[None]
+    """
+    def _coalesce(*vals):
+        for v in vals:
+            if v is not None:
+                return v
+        return None
+
+    def _clamp(x, lo, hi):
+        return max(lo, min(hi, x))
+
+    async def onSampling(
+        messages: typing.List[SamplingMessage],
+        params: CreateMessageRequestParams,
+        context
+    ):
+        # 1) Merge parametrů s defaulty
+        system_prompt = getattr(params, "systemPrompt", None)
+        temperature = _coalesce(
+            getattr(params, "temperature", None),
+            getattr(defaultParams, "temperature", None),
+            0.8
+        )
+        try:
+            temperature = float(temperature)
+        except Exception:
+            temperature = 0.8
+        temperature = _clamp(temperature, 0.0, 2.0)
+
+        max_tokens = _coalesce(
+            getattr(params, "max_tokens", None),
+            getattr(defaultParams, "max_tokens", None),
+            1000
+        )
+        try:
+            max_tokens = int(max_tokens)
+        except Exception:
+            max_tokens = 1000
+        if max_tokens <= 0:
+            max_tokens = 1000
+
+        # 2) Vyber aktuální chat session (nové se systémovým promptem, nebo reuse)
+        currentChatSession = (
+            ChatSession(system_prompt)
+            if system_prompt
+            else chatSession
+        )
+
+        # 3) Sestav dotaz z messages
+        parts: typing.List[str] = []
+        for message in messages:
+            text = None
+            try:
+                content = getattr(message, "content", message)
+                if isinstance(content, str):
+                    text = content
+                else:
+                    # podpora message.content.text
+                    text = getattr(content, "text", None)
+                    if text is None:
+                        # fallback: serializuj neznámou strukturu
+                        text = json.dumps(content, ensure_ascii=False)
+            except Exception:
+                text = str(message)
+            if text:
+                parts.append(text)
+
+        query = "\n".join(parts).strip()
+
+        # 4) Info zprávy, pokud nepřepisujeme system prompt (tj. „ptám se sám sebe“)
+        if system_prompt is None:
+            await onMessage("Musím se zeptat sám sebe")
+            await onMessage(query)
+
+        # 5) Udrž historie krátkou (pokud máme reuse session)
+        try:
+            currentChatSession._trim_history()
+        except Exception:
+            pass
+
+        # 6) Zavolej LLM
+        try:
+            llm_response = await currentChatSession.ask(
+                query,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        except Exception as e:
+            err = f"Chyba při dotazu na LLM: {e}"
+            onLog(err)
+            if system_prompt is None:
+                await onMessage(err)
+            raise
+
+        # 7) Log/echo
+        if system_prompt is None:
+            await onMessage(
+                "Odpovídám si \n\n"
+                "```json\n"
+                f"{llm_response}"
+                "\n```"
+            )
+
+        onLog(
+            "Ptám se LLM \n\n"
+            "```json\n"
+            f"{query}"
+            "\n```"
+        )
+        onLog(
+            "LLM mi odpovídá \n\n"
+            "```json\n"
+            f"{llm_response}"
+            "\n```"
+        )
+
+        print(f"onSampling {messages}, {params}")
+        return llm_response
+
+    return onSampling    
+
+
 @ui.page("/")
 async def index_page():
     chatSession = ChatSession()
@@ -293,87 +431,20 @@ async def index_page():
                 ui.markdown(msg)
         return response_message
 
-    async def send() -> None:
+    async def send(e: nicegui.events.GenericEventArguments) -> None:
+        if e.args['shiftKey']:
+            return 
+        
         question = text.value
         text.value = ''
         with message_container:
             ui.chat_message(text=question, name='You', sent=True).classes("no-tail")
 
-        # chatSession.ask
-        
-#         if question.strip() == "sdl":
-#             response = [
-#                 {"type": "text", "content": f"I have responded to {question}"},
-#                 {"type": "md", "content": schema.as_str().replace("\\n", "\n").replace('\\"', '"') }
-#             ]
-#         elif question.strip() == "explain":
-#             from src.Utils.explain_query import explain_graphql_query
-#             from src.Utils.gql_client import createGQLClient
-#             client = await createGQLClient(username="john.newbie@world.com", password="john.newbie@world.com")
-#             sdl_query = """query __ApolloGetServiceDefinition__ { _service { sdl } }"""
-#             result = await client(sdl_query, variables={})
-#             print(result)
-#             sdl = result["data"]["_service"]["sdl"]
-#             schema_ast = parse(sdl)
-#             # sdl = schema.as_str()
-#             query = """
-# query userPage($skip: Int, $limit: Int, $orderby: String, $where: UserInputWhereFilter) {
-#   userPage(skip: $skip, limit: $limit, orderby: $orderby, where: $where) {
-#   __typename
-# id
-# lastchange
-# created
-
-# name
-# givenname
-# middlename
-# email
-# firstname
-# surname
-# valid
-# startdate
-# enddate
-# }
-# }
-# """
-#             result = explain_graphql_query(schema_ast, query)
-#             response = [
-#                 {"type": "text", "content": f"I have responded to {question}"},
-#                 {"type": "md", "content": f"```gql\n{result}\n```"} 
-#             ]
-#         else:
-            from mcp.types import SamplingMessage, CreateMessageRequestParams
-            async def onSampling(
-                messages: typing.List[SamplingMessage], 
-                params: CreateMessageRequestParams, 
-                context
-            ) -> str:
-                
-                query = "\n".join([message.content.text for message in messages])
-                await addAssistantMsg(f"Musím se zeptat sám sebe")
-                await addAssistantMsg(f"{query}")
-                llm_response = await chatSession.ask(query)
-                # llm_response = '["UserGQLModel"]'
-                await addAssistantMsg((
-                    "Odpovídám si \n\n"
-                    "```json\n"
-                    f"{llm_response}"
-                    "\n```"
-                ))
-                log.push((
-                    "Ptám se LLM \n\n"
-                    "```json\n"
-                    f"{query}"
-                    "\n```"
-                ))
-                log.push((
-                    "LLM mi odpovídá \n\n"
-                    "```json\n"
-                    f"{llm_response}"
-                    "\n```"
-                ))
-                print(f"onSampling {messages}, {params}")
-                return llm_response
+            onSampling = createOnSample(
+                chatSession=chatSession,
+                onMessage=addAssistantMsg,
+                onLog=lambda msg: log.push(msg)
+            )
 
             async def onProgress(
                 progress: float, 
@@ -386,18 +457,25 @@ async def index_page():
                 )
                 pass
 
-            response = []
             async with fastmcp.Client(
                 MCPURL,
                 sampling_handler=onSampling,
                 progress_handler=onProgress
             ) as mcpClient:
+                router = MCPRouter(mcpClient=mcpClient)
                 # await addUserMsg(question)
                 await chatSession.append_history(
                     {"role": "user", "content": question}
                 )
 
                 tools = [tool.model_dump() for tool in mcp_tools]
+
+                # result = await router.route_and_call(
+                #     context=RouterContext(
+                #         user_message=question,
+                #         tools_json=tools
+                #     )
+                # )
                 # print(f"niceguid.page.tools {tools}")
                 tool_prompt = await mcpClient.get_prompt(
                     name="get_use_tools",
@@ -553,6 +631,13 @@ async def index_page():
                                         metadata=tool_response.structured_content,
                                         autoload=False
                                     )
+                            else:
+                                await addAssistantMsg((
+                                    "## Odpověď jako json\n\n"
+                                    "```json\n"
+                                    f"{tool_response}"
+                                    "\n```"
+                                ))
                         # response.append(
                         #     {"type": "md", "content": tool_response_text}    
                         # )
@@ -592,22 +677,22 @@ async def index_page():
                 #     {"type": "md", "content": f"{chat_str_response}"}
                 # ]
 
-        with message_container:
-            response_message = ui.chat_message(name='Assistent', sent=False).classes("no-tail")
-        for part in response:
-            # await asyncio.sleep(1)
-            if part["type"] == "text":
-                with response_message:
-                    # ui.html(part["content"])
-                    ui.markdown(part["content"])
-            elif part["type"] == "md":
-                with response_message:
-                    with ui.element('div').classes('table-responsive'):
-                        ui.markdown(part["content"])
+        # with message_container:
+        #     response_message = ui.chat_message(name='Assistent', sent=False).classes("no-tail")
+        # for part in response:
+        #     # await asyncio.sleep(1)
+        #     if part["type"] == "text":
+        #         with response_message:
+        #             # ui.html(part["content"])
+        #             ui.markdown(part["content"])
+        #     elif part["type"] == "md":
+        #         with response_message:
+        #             with ui.element('div').classes('table-responsive'):
+        #                 ui.markdown(part["content"])
         ui.run_javascript('window.scrollTo(0, document.body.scrollHeight)')
 
         # text.value = ''
-
+        
 
 
     ui.add_css(r'a:link, a:visited {color: inherit !important; text-decoration: none; font-weight: 500}')
@@ -713,7 +798,13 @@ async def index_page():
                 # if "OPENAI_API_KEY" != 'not-set' else \
                 # 'Please provide your OPENAI key in the Python script first!'
             )
-            text = ui.input(label="User query", placeholder=placeholder).props('rounded outlined input-class mx-3') \
-                .classes('w-full self-center').on('keydown.enter', send)
+            # text = ui.input(label="User query", placeholder=placeholder).props('rounded outlined input-class mx-3') \
+            #     .classes('w-full self-center').on('keydown.enter', send)
+            text = (
+                ui.textarea(label="User query", placeholder=placeholder)
+                .props('rounded outlined input-class mx-3') \
+                .classes('w-full self-center')
+                .on('keydown.enter', send)
+            )
 
 # endregion

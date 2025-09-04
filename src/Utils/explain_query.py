@@ -141,7 +141,8 @@ def explain_graphql_query(schema_ast, query):
                 
                 base_named = unwrap(gtype) if gtype is not None else None
                 desc = getattr(base_named, "description", None) if base_named else "missing description"
-                desc = desc.replace("\n", "\n#\t")
+                if desc is not None:
+                    desc = desc.replace("\n", "\n#\t")
                 # desc = "\n#\t ".join(desc.split()) if desc else "missing description"
                 
                 # desc = field_meta.get((parent_type.name, fname))
