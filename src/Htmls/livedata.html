@@ -100,7 +100,7 @@ query IntrospectionQuery {
 `;        
         const gqlUri = '/gql';
         let instrospection = "";
-        fetch(gqlUri, {
+        const fetchPromise = fetch(gqlUri, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: introspectionQuery })
@@ -113,6 +113,7 @@ query IntrospectionQuery {
         })
         .then(data => {
             introspection = data.data
+            return instrospection
         })
         .catch(error => {
             introspection = "ERROR"
@@ -492,10 +493,60 @@ query IntrospectionQuery {
             
         }
 
+        async function collectFirstItems(endpointUrl=gqlUri) {
+            const schemaData = introspection.__schema;
+            const types = schemaData.types;
+            const typesByName = {};
+            for (const t of types) {
+                if (!t.name.startsWith("__")) {
+                    typesByName[t.name] = t;
+                }
+            }
+
+            const queryTypeName = schemaData.queryType?.name;
+            const queryType = typesByName[queryTypeName];
+            if (!queryType) {
+                throw new Error("No query type found in schema");
+            }
+
+            const results = {};
+
+            for (const field of queryType.fields) {
+                // skip pokud má povinné argumenty
+                const hasRequiredArgs = field.args.some(arg => arg.type.kind === "NON_NULL");
+                if (hasRequiredArgs) continue;
+
+                // skip pokud návratový typ není LIST
+                const namedType = variableTypeString(field.type);
+                if (!namedType.includes("[")) continue;
+
+                // vygeneruj query pro tento field
+                const queryStr = generateQueryExample(field, typesByName);
+
+                try {
+                    const response = await fetch(endpointUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ query: queryStr, variables: {} })
+                    });
+                    const json = await response.json();
+                    console.log(field, json)
+                    if (json.data && json.data[field.name] && json.data[field.name].length > 0) {
+                        const first = json.data[field.name][0];
+                        results[field.name] = first;
+                    }
+                } catch (err) {
+                    console.error(`Error fetching field ${field.name}:`, err);
+                }
+            }
+
+            return results;
+        }        
+
     </script>
     <script type="text/babel">
 
-        const firstItem = {
+        let firstItem = {
             __typename: "UserGQLModel",
             id: "51d101a0-81f1-44ca-8366-6cf51432e8d6",
             user: {
@@ -531,7 +582,10 @@ query IntrospectionQuery {
                 </div>
             )
         }
-        const CardCapsule = ({children}) => <div className="card"><div className="card-body">{children}</div></div>
+        const CardCapsule = ({header=null, children}) => <div className="card">
+            {header && <div className="card-header">{header}</div>}
+            <div className="card-body">{children}</div>
+          </div>
         const Table = ({data}) => {
             if (data.length == 0) {
                 return null
@@ -602,10 +656,22 @@ query IntrospectionQuery {
                 </a>
             )
         }
+        const HomeLink = () => {
+            const { goToHome } = React.useContext(GQLEntityContext);
+            const onClick = async (e) => {
+                e.preventDefault();
+                // setLoading(true);
+                goToHome()
+                // setLoading(false);                
+            }
+            return (
+                <a href="#" onClick={onClick}>🏠</a>
+            )
+        }
 
         const MediumCard = ({item}) => {
             return (
-                <CardCapsule>
+                <CardCapsule header={<HomeLink />}>
                     {Object.entries(item).map(([attribute_name, attribute_value]) => {
                         // if (attribute_name !== "id") return null
                         if (Array.isArray(attribute_value)) return null
@@ -736,6 +802,11 @@ query IntrospectionQuery {
             const [data, setData] = React.useState(firstItem);
             const [error, setError] = React.useState(null);
             const [query, setQuery] = React.useState("");
+            const [usedVariables, setUsedVariables] = React.useState({})
+
+            const goToHome = () => {
+                setData(() => firstItem)
+            }
 
             const fetchEntityByTypeAndId = async (typeName, id) => {
                 if (!introspection) {
@@ -753,6 +824,7 @@ query IntrospectionQuery {
                       "id": id
                     }
                 ]}
+                setUsedVariables(() => variables)
                 if (!gqlQuery) {
                     setError("No matching query for type: " + typeName);
                     return null;
@@ -787,14 +859,14 @@ query IntrospectionQuery {
             };
 
             return (
-                <GQLEntityContext.Provider value={{ fetchEntityByTypeAndId, query, data, error }}>
+                <GQLEntityContext.Provider value={{ fetchEntityByTypeAndId, goToHome, query, usedVariables, data, error }}>
                     {children}
                 </GQLEntityContext.Provider>
             );
         };
 
         const Visualiser = () => {
-            const { data, query } = React.useContext(GQLEntityContext);
+            const { data, query, usedVariables } = React.useContext(GQLEntityContext);
             const context = React.useContext(GQLEntityContext);
             // console.log("Visualiser.data", data)
             // console.log("Visualiser.context", context)
@@ -810,9 +882,25 @@ query IntrospectionQuery {
                         </Col>
                     </Row>
 
+                    <Row>
+                        <Col>
+                            <CardCapsule header="query">
+                                <pre>{query}</pre>
+                            </CardCapsule>
+                        </Col>
+                        <Col>
+                            <CardCapsule header="used variables">
+                                <pre>{JSON.stringify(usedVariables, null, 4)}</pre>
+                            </CardCapsule>
+                        </Col>
+                        <Col>
+                            <CardCapsule header="response">
+                                <pre>{JSON.stringify(data, null, 4)}</pre>
+                            </CardCapsule>
+                        </Col>
+                    </Row>
                     
-                    <pre>{query}</pre>
-                    <pre>{JSON.stringify(data, null, 4)}</pre>
+                    
                 </div>
             );
         }
@@ -825,10 +913,25 @@ query IntrospectionQuery {
             )
         };
 
+        function RunApp() {
+            const container = document.getElementById('root');
+            const root = ReactDOM.createRoot(container);
+            root.render(<App />);
+        }
+        
 
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
-        root.render(<App />);
+        fetchPromise.then(
+            introspection => {
+                collectFirstItems().then(
+                    json => {
+                        console.log(json)
+                        firstItem = {...json, ...firstItem}
+                        RunApp()
+                    }
+                )
+            }
+        )
+        
 
     </script>
 

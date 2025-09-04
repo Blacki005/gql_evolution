@@ -45,11 +45,16 @@ class EventInputFilter:
     name: str
     name_en: str
     description: str
-    start_date: datetime.datetime
-    end_date: datetime.datetime
+    startdate: datetime.datetime
+    enddate: datetime.datetime
     id: IDType
     valid: bool
-    
+    user_invitations: EventInvitationInputFilter = strawberry.field(description="""Eventinvitation filter operators, 
+for field "user_invitations" the filters could be
+{"user_invitations": {"user_id": {"_eq": "ce22d5ab-f867-4cf1-8e3c-ee77eab81c24"}}}
+{"user_invitations": {"state_id": {"_eq": "91fcbf2d-8acd-49ac-ac7e-39c3e23e2ea1"}}}
+{"user_invitations": {"_and": [{"user_id": {"_eq": "ce22d5ab-f867-4cf1-8e3c-ee77eab81c24"}}, {"state_id": {"_eq": "91fcbf2d-8acd-49ac-ac7e-39c3e23e2ea1"}}]}}
+""")
 
 @strawberry.federation.type(
     description="""Entity representing a Event""",
@@ -118,10 +123,31 @@ Materializovaná cesta reprezentující umístění skupiny v hierarchii.""",
     )
 
     valid: typing.Optional[bool] = strawberry.field(
+        name="valid_raw",
         description="""If it intersects current date""",
         default=None,
         permission_classes=[OnlyForAuthentized]
     )
+
+    @strawberry.field(
+        name="valid",
+        description="""Event duration, implicitly in minutes""",
+        permission_classes=[
+            OnlyForAuthentized,
+            # OnlyForAdmins
+        ],
+    )
+    def valid_(self) -> typing.Optional[bool]:
+        if self.valid is not None:
+            return self.valid
+        now = datetime.datetime.now()
+        if self.startdate and self.enddate:
+            return self.startdate <= now <= self.enddate
+        elif self.startdate:
+            return self.startdate <= now
+        elif self.enddate:
+            return now <= self.enddate
+        return False
 
     @strawberry.field(
         name="duration",
@@ -174,6 +200,14 @@ Materializovaná cesta reprezentující umístění skupiny v hierarchii.""",
         permission_classes=[
             OnlyForAuthentized
         ]
+    )
+    
+    masterevent: typing.Optional["EventGQLModel"] = strawberry.field(
+        description="""Event which owns this particular event""",
+        permission_classes=[
+            OnlyForAuthentized
+        ],
+        resolver=ScalarResolver["EventGQLModel"](fkey_field_name="masterevent_id")
     )
 
     subevents: typing.List["EventGQLModel"] = strawberry.field(

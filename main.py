@@ -106,12 +106,24 @@ async def get_context(request: Request):
     result["request"] = request
     return result
 
+innerlifespan = None
+@asynccontextmanager
+async def dummy(app: FastAPI):
+    yield 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.DBFeeder import backupDB
-    initizalizedEngine = await RunOnceAndReturnSessionMaker()
-    yield
-    await backupDB(initizalizedEngine)
+    icm = dummy if innerlifespan is None else innerlifespan
+    async with icm(app):
+        print(f"FastAPI.lifespan {innerlifespan is None}")
+        initizalizedEngine = await RunOnceAndReturnSessionMaker()
+        try:
+            yield
+        finally:
+            pass
+        await backupDB(initizalizedEngine)
+    
     # print("App shutdown, nothing to do")
 
 app = FastAPI(lifespan=lifespan)
@@ -157,6 +169,7 @@ async def metrics():
         content=prometheus_client.generate_latest(), 
         media_type=prometheus_client.CONTENT_TYPE_LATEST
         )
+
 
 logging.info("All initialization is done")
 
@@ -211,3 +224,45 @@ else:
 logging.info(f"DEMO = {DEMO}")
 logging.info(f"SYSLOGHOST = {SYSLOGHOST}")
 logging.info(f"GQLUG_ENDPOINT_URL = {GQLUG_ENDPOINT_URL}")
+
+# endregion
+
+# region nicegui
+from main_nicegui import nicegui, nicegui_app
+nicegui.ui.run_with(
+    app,
+    title="GQL Evolution",
+    mount_path="/nicegui",
+    favicon="🚀",
+    dark=None,
+    tailwind=True,
+    storage_secret="SUPER-SECRET")
+# endregion
+
+# region mcp
+from main_mcp import mcp_app, Client
+innerlifespan = mcp_app.lifespan
+app.mount(path="/mcp", app=mcp_app)
+
+@app.get("/testmcp")
+async def test_mcp() -> dict:
+    # client = Client(mcp_app)
+    client = Client("http://localhost:8002/mcp")
+    result = {}
+    async with client:
+        result["tool.response"] = await client.call_tool("echo", {"text": "hello"})
+
+        resources = await client.list_resource_templates()
+        tools = await client.list_tools()
+        print(f"tools: {tools}")
+        # Filter resources by tag
+        result["config_resources"] = [
+            resource for resource in resources 
+            # if hasattr(resource, '_meta') and resource._meta and
+            #     resource._meta.get('_fastmcp', {}) and
+            #     'config' in resource._meta.get('_fastmcp', {}).get('tags', [])
+        ]        
+    return result
+# endregion
+
+# v následujícím dotazu identifikuj datové entity, a podmínky, které mají splňovat. seznam datových entit (jejich odhadnuté názvy) uveď jako json list obsahující stringy - názvy seznam podmínek uveď jako json list obsahující dict např. {"name": {"_eq": "Pavel"}} pokud se jedná o podmínku v relaci, odpovídající dict je tento {"related_entity": {"attribute_name": {"_eq": "value"}}} v dict nikdy není použit klíč, který by sdružoval více názvů atributů dotaz: najdi mi všechny uživatele, kteří jsou členy katedry K209

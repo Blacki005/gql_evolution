@@ -23,4 +23,4 @@
 .env.test.local
 .env.production.local
 
-environment.secret.txt
+**/environment.secret.txt
