@@ -589,86 +589,86 @@ async def get_graphql_types(ctx: fastmcp.Context):
     result = list(result.values())
     return result
 
-@mcp.prompt(
-    description="build system prompt for tool router "
-)
-async def get_router_prompt(ctx: fastmcp.Context):
-    ROUTER_SYSTEM_PROMPT = ("""You are a Tool Router for an MCP server.
-    Your task: (1) choose the best tool from TOOLS_JSON, (2) return a STRICT JSON action,
-    (3) if an ERROR_FROM_TOOL is provided, correct only the necessary arguments and return a new tool_call.
+# @mcp.prompt(
+#     description="build system prompt for tool router "
+# )
+# async def get_router_prompt(ctx: fastmcp.Context):
+#     ROUTER_SYSTEM_PROMPT = ("""You are a Tool Router for an MCP server.
+#     Your task: (1) choose the best tool from TOOLS_JSON, (2) return a STRICT JSON action,
+#     (3) if an ERROR_FROM_TOOL is provided, correct only the necessary arguments and return a new tool_call.
 
-    Inputs you receive:
-    - TOOLS_JSON: JSON array of tools with {name, description, arg_schema}
-    - USER_MESSAGE: user's request
-    - LAST_TOOL_ATTEMPT: optional last tool_call JSON
-    - ERROR_FROM_TOOL: optional last tool error {code, message}
-    - RETRY_COUNT, MAX_RETRIES: integers
+#     Inputs you receive:
+#     - TOOLS_JSON: JSON array of tools with {name, description, arg_schema}
+#     - USER_MESSAGE: user's request
+#     - LAST_TOOL_ATTEMPT: optional last tool_call JSON
+#     - ERROR_FROM_TOOL: optional last tool error {code, message}
+#     - RETRY_COUNT, MAX_RETRIES: integers
 
-    Output (JSON only; no prose):
-    Either:
-    { "action":"tool_call", "tool_name":"<name>", "arguments": {..}, "idempotency_key":"<string>", "postconditions":{"expectations":"<short>","success_criteria":["..."]}}
-    or
-    { "action":"ask_clarifying_question", "question":"<one precise question>", "missing_fields":["..."] }
-    or
-    { "action":"final_answer", "content":"<short answer>" }
+#     Output (JSON only; no prose):
+#     Either:
+#     { "action":"tool_call", "tool_name":"<name>", "arguments": {..}, "idempotency_key":"<string>", "postconditions":{"expectations":"<short>","success_criteria":["..."]}}
+#     or
+#     { "action":"ask_clarifying_question", "question":"<one precise question>", "missing_fields":["..."] }
+#     or
+#     { "action":"final_answer", "content":"<short answer>" }
 
-    Rules:
-    - Select the tool whose arg_schema and description fit USER_MESSAGE with minimal assumptions.
-    - Validate argument types and formats against arg_schema (strings, numbers, booleans, date 'YYYY-MM-DD').
-    - Use safe defaults only if present in arg_schema defaults; otherwise ask a clarifying question.
-    - If ERROR_FROM_TOOL exists and RETRY_COUNT < MAX_RETRIES, fix only relevant arguments and return a new tool_call.
-    - Never include any text except the JSON object.
-    """    )
-    return ROUTER_SYSTEM_PROMPT
+#     Rules:
+#     - Select the tool whose arg_schema and description fit USER_MESSAGE with minimal assumptions.
+#     - Validate argument types and formats against arg_schema (strings, numbers, booleans, date 'YYYY-MM-DD').
+#     - Use safe defaults only if present in arg_schema defaults; otherwise ask a clarifying question.
+#     - If ERROR_FROM_TOOL exists and RETRY_COUNT < MAX_RETRIES, fix only relevant arguments and return a new tool_call.
+#     - Never include any text except the JSON object.
+#     """    )
+#     return ROUTER_SYSTEM_PROMPT
 
-@mcp.resource(
-    description="returns the schema of response to router tool",
-    uri="resource://mcp/router"
-)
-async def get_router_schema():
+# @mcp.resource(
+#     description="returns the schema of response to router tool",
+#     uri="resource://mcp/router"
+# )
+# async def get_router_schema():
     
-    ROUTER_OUTPUT_SCHEMA = {
-        "type": "object",
-        "oneOf": [
-            {
-                "properties": {
-                    "action": {"const": "tool_call"},
-                    "tool_name": {"type": "string"},
-                    "arguments": {"type": "object"},
-                    "idempotency_key": {"type": "string"},
-                    "postconditions": {
-                        "type": "object",
-                        "properties": {
-                            "expectations": {"type": "string"},
-                            "success_criteria": {"type": "array", "items": {"type": "string"}},
-                        },
-                        "required": ["expectations", "success_criteria"],
-                        "additionalProperties": True,
-                    },
-                },
-                "required": ["action", "tool_name", "arguments", "idempotency_key"],
-                "additionalProperties": True,
-            },
-            {
-                "properties": {
-                    "action": {"const": "ask_clarifying_question"},
-                    "question": {"type": "string"},
-                    "missing_fields": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["action", "question"],
-                "additionalProperties": False,
-            },
-            {
-                "properties": {
-                    "action": {"const": "final_answer"},
-                    "content": {"type": "string"},
-                },
-                "required": ["action", "content"],
-                "additionalProperties": False,
-            },
-        ],
-    }
-    return ROUTER_OUTPUT_SCHEMA
+#     ROUTER_OUTPUT_SCHEMA = {
+#         "type": "object",
+#         "oneOf": [
+#             {
+#                 "properties": {
+#                     "action": {"const": "tool_call"},
+#                     "tool_name": {"type": "string"},
+#                     "arguments": {"type": "object"},
+#                     "idempotency_key": {"type": "string"},
+#                     "postconditions": {
+#                         "type": "object",
+#                         "properties": {
+#                             "expectations": {"type": "string"},
+#                             "success_criteria": {"type": "array", "items": {"type": "string"}},
+#                         },
+#                         "required": ["expectations", "success_criteria"],
+#                         "additionalProperties": True,
+#                     },
+#                 },
+#                 "required": ["action", "tool_name", "arguments", "idempotency_key"],
+#                 "additionalProperties": True,
+#             },
+#             {
+#                 "properties": {
+#                     "action": {"const": "ask_clarifying_question"},
+#                     "question": {"type": "string"},
+#                     "missing_fields": {"type": "array", "items": {"type": "string"}},
+#                 },
+#                 "required": ["action", "question"],
+#                 "additionalProperties": False,
+#             },
+#             {
+#                 "properties": {
+#                     "action": {"const": "final_answer"},
+#                     "content": {"type": "string"},
+#                 },
+#                 "required": ["action", "content"],
+#                 "additionalProperties": False,
+#             },
+#         ],
+#     }
+#     return ROUTER_OUTPUT_SCHEMA
 
 @mcp.resource(
     description=(
@@ -705,41 +705,41 @@ async def build_graphql_query_nested(
     )
     return query
      
-@mcp.prompt(
-    description=(
-        "build system prompt for MCP tool router"
-    )
-)
-async def tool_router():
-    prompt = (
-    """You are a Tool Router for an MCP server.
-Your task: (1) choose the best tool from TOOLS_JSON, (2) return a STRICT JSON action,
-(3) if an ERROR_FROM_TOOL is provided, correct only the necessary arguments and return a new tool_call.
+# @mcp.prompt(
+#     description=(
+#         "build system prompt for MCP tool router"
+#     )
+# )
+# async def tool_router():
+#     prompt = (
+#     """You are a Tool Router for an MCP server.
+# Your task: (1) choose the best tool from TOOLS_JSON, (2) return a STRICT JSON action,
+# (3) if an ERROR_FROM_TOOL is provided, correct only the necessary arguments and return a new tool_call.
 
-Inputs you receive:
-- TOOLS_JSON: JSON array of tools with {name, description, arg_schema}
-- USER_MESSAGE: user's request
-- LAST_TOOL_ATTEMPT: optional last tool_call JSON
-- ERROR_FROM_TOOL: optional last tool error {code, message}
-- RETRY_COUNT, MAX_RETRIES: integers
+# Inputs you receive:
+# - TOOLS_JSON: JSON array of tools with {name, description, arg_schema}
+# - USER_MESSAGE: user's request
+# - LAST_TOOL_ATTEMPT: optional last tool_call JSON
+# - ERROR_FROM_TOOL: optional last tool error {code, message}
+# - RETRY_COUNT, MAX_RETRIES: integers
 
-Output (JSON only; no prose):
-Either:
-{ "action":"tool_call", "tool_name":"<name>", "arguments": {..}, "idempotency_key":"<string>", "postconditions":{"expectations":"<short>","success_criteria":["..."]}}
-or
-{ "action":"ask_clarifying_question", "question":"<one precise question>", "missing_fields":["..."] }
-or
-{ "action":"final_answer", "content":"<short answer>" }
+# Output (JSON only; no prose):
+# Either:
+# { "action":"tool_call", "tool_name":"<name>", "arguments": {..}, "idempotency_key":"<string>", "postconditions":{"expectations":"<short>","success_criteria":["..."]}}
+# or
+# { "action":"ask_clarifying_question", "question":"<one precise question>", "missing_fields":["..."] }
+# or
+# { "action":"final_answer", "content":"<short answer>" }
 
-Rules:
-- Select the tool whose arg_schema and description fit USER_MESSAGE with minimal assumptions.
-- Validate argument types and formats against arg_schema (strings, numbers, booleans, date 'YYYY-MM-DD').
-- Use safe defaults only if present in arg_schema defaults; otherwise ask a clarifying question.
-- If ERROR_FROM_TOOL exists and RETRY_COUNT < MAX_RETRIES, fix only relevant arguments and return a new tool_call.
-- Never include any text except the JSON object.
-"""
-    )
-    return prompt
+# Rules:
+# - Select the tool whose arg_schema and description fit USER_MESSAGE with minimal assumptions.
+# - Validate argument types and formats against arg_schema (strings, numbers, booleans, date 'YYYY-MM-DD').
+# - Use safe defaults only if present in arg_schema defaults; otherwise ask a clarifying question.
+# - If ERROR_FROM_TOOL exists and RETRY_COUNT < MAX_RETRIES, fix only relevant arguments and return a new tool_call.
+# - Never include any text except the JSON object.
+# """
+#     )
+#     return prompt
 
 
 @mcp.prompt(
@@ -782,89 +782,89 @@ output:
     return prompt
 
 
-from jsonschema import validate as jsonschema_validate, Draft202012Validator, ValidationError
-@mcp.tool(
-    description=(
-        "Tool router. "
-        "Can decide which tool to choose. "
-    ),
-    tags={"toolrouter"}
-)
-async def tool_router(
-    tools_json: typing.List[typing.Dict[str, typing.Any]],
-    user_message: str,
-    last_tool_attempt: typing.Optional[typing.Dict[str, typing.Any]] = None,
-    error_from_tool: typing.Optional[typing.Dict[str, typing.Any]] = None,
-    retry_count: int = 0,
-    max_retries: int = 3,
-    ctx: fastmcp.Context = None
-) -> ToolResult:
+# from jsonschema import validate as jsonschema_validate, Draft202012Validator, ValidationError
+# @mcp.tool(
+#     description=(
+#         "Tool router. "
+#         "Can decide which tool to choose. "
+#     ),
+#     tags={"toolrouter"}
+# )
+# async def tool_router(
+#     tools_json: typing.List[typing.Dict[str, typing.Any]],
+#     user_message: str,
+#     last_tool_attempt: typing.Optional[typing.Dict[str, typing.Any]] = None,
+#     error_from_tool: typing.Optional[typing.Dict[str, typing.Any]] = None,
+#     retry_count: int = 0,
+#     max_retries: int = 3,
+#     ctx: fastmcp.Context = None
+# ) -> ToolResult:
     
-    ROUTER_SYSTEM_PROMPT = await get_router_prompt.fn()
-    messages = [
-        json.dumps(
-            {
-                "TOOLS_JSON": tools_json,
-                "USER_MESSAGE": user_message,
-                "LAST_TOOL_ATTEMPT": last_tool_attempt,
-                "ERROR_FROM_TOOL": error_from_tool,
-                "RETRY_COUNT": retry_count,
-                "MAX_RETRIES": max_retries,
-            },
-            ensure_ascii=False,
-        ),
-    ]
+#     ROUTER_SYSTEM_PROMPT = await get_router_prompt.fn()
+#     messages = [
+#         json.dumps(
+#             {
+#                 "TOOLS_JSON": tools_json,
+#                 "USER_MESSAGE": user_message,
+#                 "LAST_TOOL_ATTEMPT": last_tool_attempt,
+#                 "ERROR_FROM_TOOL": error_from_tool,
+#                 "RETRY_COUNT": retry_count,
+#                 "MAX_RETRIES": max_retries,
+#             },
+#             ensure_ascii=False,
+#         ),
+#     ]
 
-    llm_response = await ctx.sample(
-        system_prompt=ROUTER_SYSTEM_PROMPT,
-        messages=messages,
-        temperature=0.2
-    )
+#     llm_response = await ctx.sample(
+#         system_prompt=ROUTER_SYSTEM_PROMPT,
+#         messages=messages,
+#         temperature=0.2
+#     )
 
-    try:
-        data = json.loads(llm_response)
-    except json.JSONDecodeError as e:
-        return ToolResult(
-            content=TextContent(
-                type="text",
-                text=f"LLM did not return valid JSON: {e}\n{llm_response}"
-            ),
-            structured_content={
-                "sourceid": "8a238bdc-c97c-433e-bd2a-3f7760157a0f",
-                "errors": [
-                    f"LLM did not return valid JSON: {e}\n{llm_response}"
-                ]
-            }
-        )
+#     try:
+#         data = json.loads(llm_response)
+#     except json.JSONDecodeError as e:
+#         return ToolResult(
+#             content=TextContent(
+#                 type="text",
+#                 text=f"LLM did not return valid JSON: {e}\n{llm_response}"
+#             ),
+#             structured_content={
+#                 "sourceid": "8a238bdc-c97c-433e-bd2a-3f7760157a0f",
+#                 "errors": [
+#                     f"LLM did not return valid JSON: {e}\n{llm_response}"
+#                 ]
+#             }
+#         )
     
 
-    ROUTER_OUTPUT_SCHEMA = await get_router_schema.fn()
-    try:
-        Draft202012Validator(ROUTER_OUTPUT_SCHEMA).validate(data)
-    except ValidationError as e:
-        # raise RuntimeError(f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}")
-        return ToolResult(
-            content=TextContent(
-                type="text",
-                text=f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}"
-            ),
-            structured_content={
-                "sourceid": "7037075e-2f2a-4696-b693-bed0a2885630",
-                "errors": [
-                    f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}"
-                ]
-            }
-        )
-    return ToolResult(
-        content=TextContent(
-            type="text",
-            text=f"{json.dumps(data)}"
-        ),
-        structured_content={
-            "sourceid": "0459c509-61f3-4269-85ae-2c9283518cb6",
-            "data": data
-        }
-    )
+#     ROUTER_OUTPUT_SCHEMA = await get_router_schema.fn()
+#     try:
+#         Draft202012Validator(ROUTER_OUTPUT_SCHEMA).validate(data)
+#     except ValidationError as e:
+#         # raise RuntimeError(f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}")
+#         return ToolResult(
+#             content=TextContent(
+#                 type="text",
+#                 text=f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}"
+#             ),
+#             structured_content={
+#                 "sourceid": "7037075e-2f2a-4696-b693-bed0a2885630",
+#                 "errors": [
+#                     f"Router output schema validation failed: {e.message}\nGot: {json.dumps(data, ensure_ascii=False)}"
+#                 ]
+#             }
+#         )
+#     return ToolResult(
+#         content=TextContent(
+#             type="text",
+#             text=f"{json.dumps(data)}"
+#         ),
+#         structured_content={
+#             "sourceid": "0459c509-61f3-4269-85ae-2c9283518cb6",
+#             "data": data
+#         }
+#     )
 
 
 
@@ -989,6 +989,7 @@ async def get_graphQL_data(
     # types and its description extraction
 
     availableGQLTypes = await get_graphql_types.fn(ctx)
+
     # sdl_ast = ctx.get_state("sdl_ast")
     gqlClient = ctx.get_state("gqlClient")
     assert gqlClient is not None, f"ctx.state does not contains gqlClient, that is code error"
@@ -1005,6 +1006,16 @@ async def get_graphQL_data(
     )
     print(f"get_graphQL_data.llmresponse: {llmresponse}")
     type_list = json.loads(llmresponse.text)
+
+    assert isinstance(type_list, list), (
+        "Unable to get related graphql types.\n"
+        f"{llmresponse.text}"
+    )
+    assert len(availableGQLTypes) > 0, (
+        "The list of recognized graphql types is empty.\n"
+        f"{json.dumps(availableGQLTypes, indent=2)}"
+    )
+
     query = await build_graphql_query_nested.fn(
         types="/".join(type_list),
         ctx=ctx

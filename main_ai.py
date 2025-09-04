@@ -122,6 +122,7 @@ class RouterContext:
 
 class FilterType:
     ROUTE_SELECT   = "route_select"    # před výběrem nástroje (LLM routing apod.)
+    ROUTE_ERROR    = "route_error"     # při chybě v průbehu identifikace nástroje
     TOOL_CALL      = "tool_call"       # těsně před voláním nástroje
     TOOL_RESULT    = "tool_result"     # po úspěšném volání nástroje
     TOOL_ERROR     = "tool_error"      # po chybě volání nástroje (pro self-repair)
@@ -239,78 +240,169 @@ class MCPRouter:
         }
         return ROUTER_OUTPUT_SCHEMA
 
+    @staticmethod
+    def _extract_json(text: str):
+        """Vrátí dict z JSON odpovědi i když je obalená textem / ```json ...```."""
+        if not isinstance(text, str):
+            raise ValueError("LLM response is not a string")
+        # 1) zkus rovnou JSON
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        # 2) code-fence ```json ... ```
+        m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+        if m:
+            return json.loads(m.group(1))
+        # 3) first { ... last } heuristika
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end+1])
+        raise ValueError("No JSON object found in LLM response")
+
+    @staticmethod
+    def _normalize_router_output(d: dict) -> dict:
+        """Opraví časté překlepy: toolname→tool_name, atd.; normalizuje action aliasy."""
+        if not isinstance(d, dict):
+            return d
+        mapping = {
+            "toolname": "tool_name",
+            "idempotencykey": "idempotency_key",
+            "successcriteria": "success_criteria",
+            "postcondition": "postconditions",
+        }
+        for k_old, k_new in list(mapping.items()):
+            if k_old in d and k_new not in d:
+                d[k_new] = d.pop(k_old)
+
+        # normalizuj action aliasy → tool_call
+        action = d.get("action")
+        if isinstance(action, str):
+            alias = action.lower().replace("-", "_")
+            if alias in {
+                "toolcall", "call_tool", "calltool", "invoke_tool",
+                "getgraphqldata", "get_graphql_data", "getgraphQLdata".lower(), "get_graphQL_data".lower()
+            }:
+                d["action"] = "tool_call"
+
+        # postconditions vnořená oprava
+        pc = d.get("postconditions")
+        if isinstance(pc, dict) and "successcriteria" in pc and "success_criteria" not in pc:
+            pc["success_criteria"] = pc.pop("successcriteria")
+        return d
+
+    @staticmethod
+    def _canonical_tool_name(name: str, tools_json: list[dict]) -> str | None:
+        """Najde kanonické jméno nástroje v TOOLS_JSON (case/underscore insensitive)."""
+        if not name:
+            return None
+        names = [t.get("name") for t in tools_json or [] if t.get("name")]
+        if name in names:
+            return name
+        lower_map = {n.lower(): n for n in names}
+        if name.lower() in lower_map:
+            return lower_map[name.lower()]
+        # underscore/space insensitivity
+        def norm(s): return re.sub(r"[\s_]+", "", s).lower()
+        norm_map = {norm(n): n for n in names}
+        return norm_map.get(norm(name))
+
     async def planner(self, ctx: RouterContext) -> RouterContext:
         """
-        LLM router → vybere nástroj a argumenty.
-        Využívá self.systemPrompt() a self.outputSchema() (stejně jako původní chooseTool).
+        LLM router → vybere nástroj a argumenty (s retry & sanitizací výstupu).
         """
         ROUTER_SYSTEM_PROMPT = self.systemPrompt()
         ROUTER_OUTPUT_SCHEMA = self.outputSchema()
-
-        # připrav ChatSession s router system promptem
         chat = ChatSession(system_prompt=ROUTER_SYSTEM_PROMPT)
 
-        # payload pro LLM (analogicky k chooseTool)
-        payload = {
-            "TOOLS_JSON": ctx.tools_json,
-            "USER_MESSAGE": ctx.user_message,
-            "LAST_TOOL_ATTEMPT": ctx.meta.get("LAST_TOOL_ATTEMPT"),
-            "ERROR_FROM_TOOL": ctx.error,                 # při prvním průchodu None
-            "RETRY_COUNT": ctx.attempt or 0,
-            "MAX_RETRIES": ctx.max_retries,
-        }
+        # Kolikrát zkusit opravit/plánovat (nezaměňuj s tool retry)
+        router_retries = min(max(ctx.max_retries, 1), 3)  # např. 1–3 pokusy
 
-        # zavolej LLM – pošli payload jako user message (nepřidáváme extra .append_history)
-        llm_response = await chat.ask(
-            user_text=json.dumps(payload, ensure_ascii=False),
-            temperature=0.2,
-            max_tokens=1000,
-        )
+        last_error = None
+        last_raw = None
 
-        # parse JSON
-        try:
-            data = json.loads(llm_response)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"LLM did not return valid JSON: {e}\n{llm_response}")
+        for rtry in range(router_retries):
+            system_prompt = ctx.meta.get("override_system_prompt", self.systemPrompt())
+            chat = ChatSession(system_prompt=system_prompt)
+            payload = {
+                "TOOLS_JSON": ctx.tools_json,
+                "USER_MESSAGE": ctx.user_message,
+                "LAST_TOOL_ATTEMPT": ctx.meta.get("LAST_TOOL_ATTEMPT"),
+                "ERROR_FROM_TOOL": ctx.error,     # při prvním průchodu None
+                "RETRY_COUNT": rtry,
+                "MAX_RETRIES": router_retries,
+            }
 
-        # validace proti schema
-        try:
-            Draft202012Validator(ROUTER_OUTPUT_SCHEMA).validate(data)
-        except ValidationError as e:
-            raise RuntimeError(
-                f"Router output schema validation failed: {e.message}\n"
-                f"Got: {json.dumps(data, ensure_ascii=False)}"
+            llm_response = await chat.ask(
+                user_text=json.dumps(payload, ensure_ascii=False),
+                temperature=0.2,
+                max_tokens=1000,
             )
+            last_raw = llm_response
 
-        # zpracování akce routeru
-        action = data.get("action")
+            # 1) Parse & normalize
+            try:
+                data = self._extract_json(llm_response)
+                data = self._normalize_router_output(data)
+            except Exception as e:
+                last_error = f"Router JSON parse failed: {e}"
+                ctx.meta["router_last_error"] = last_error
+                ctx.meta["router_last_raw"] = last_raw
+                async def _noop(_): return None
+                await self._run_pipeline(FilterType.ROUTE_ERROR, ctx, _noop)
+                continue # dalsi pokus
 
-        if action == "tool_call":
-            ctx.selected_tool = data["tool_name"]
-            ctx.arguments = data.get("arguments") or {}
-            # pomocná metadata (nepovinné, ale praktické pro audit/idempotenci)
-            ctx.meta["idempotency_key"] = data.get("idempotency_key")
-            ctx.meta["postconditions"]  = data.get("postconditions")
-            ctx.meta["router_raw"]      = data
-            return ctx
+            # 2) Validate
+            try:
+                Draft202012Validator(ROUTER_OUTPUT_SCHEMA).validate(data)
+            except ValidationError as e:
+                last_error = f"Router output schema validation failed: {e.message}"
+                ctx.meta["router_last_error"] = last_error
+                ctx.meta["router_last_raw"] = data
+                async def _noop(_): return None
+                await self._run_pipeline(FilterType.ROUTE_ERROR, ctx, _noop)
+                continue
 
-        elif action == "ask_clarifying_question":
-            # uložíme dotaz; upstream může buď rovnou vypsat uživateli,
-            # nebo vyhodit výjimku, pokud očekáváme vždy tool_call
-            ctx.meta["router_question"] = data["question"]
-            ctx.meta["router_missing_fields"] = data.get("missing_fields", [])
-            ctx.meta["router_raw"] = data
-            return ctx  # route_and_call vyhodí chybu, protože není selected_tool
+            # 3) Handle action
+            action = data.get("action")
 
-        elif action == "final_answer":
-            # router usoudil, že není třeba nástroj – uložíme text
-            ctx.meta["router_final_answer"] = data["content"]
-            ctx.meta["router_raw"] = data
-            return ctx  # opět: bez selected_tool → upstream rozhodne co dál
+            if action == "tool_call":
+                tool_name = data.get("tool_name")
+                # kanonizace jména podle TOOLS_JSON
+                canon = self._canonical_tool_name(tool_name, ctx.tools_json)
+                if canon is None:
+                    last_error = f"Unknown tool '{tool_name}' (not found in TOOLS_JSON)."
+                    ctx.meta["router_last_error"] = last_error
+                    ctx.meta["router_last_raw"] = data
+                    async def _noop(_): return None
+                    await self._run_pipeline(FilterType.ROUTE_ERROR, ctx, _noop)
+                    continue
 
-        # neočekávaná akce
-        raise RuntimeError(f"Unknown router action: {action}")
+                ctx.selected_tool = canon
+                ctx.arguments = data.get("arguments") or {}
+                ctx.meta["idempotency_key"] = data.get("idempotency_key")
+                ctx.meta["postconditions"] = data.get("postconditions")
+                ctx.meta["router_raw"] = data
+                return ctx
 
+            if action == "ask_clarifying_question":
+                ctx.meta["router_question"] = data["question"]
+                ctx.meta["router_missing_fields"] = data.get("missing_fields", [])
+                ctx.meta["router_raw"] = data
+                return ctx  # bez selected_tool – necháme nadřazenou logiku rozhodnout
+
+            if action == "final_answer":
+                ctx.meta["router_final_answer"] = data["content"]
+                ctx.meta["router_raw"] = data
+                return ctx
+
+            last_error = f"Unknown router action: {action}"
+
+        # po vyčerpání pokusů
+        detail = (last_raw[:400] + "...") if isinstance(last_raw, str) and len(last_raw) > 400 else last_raw
+        raise RuntimeError(f"Router planning failed after {router_retries} attempts. Last error: {last_error}\nLast response: {detail}")
+    
     async def invoker(self, ctx: RouterContext):
         if not ctx.selected_tool:
             raise RuntimeError("No tool selected in context.")
