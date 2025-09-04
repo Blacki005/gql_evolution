@@ -13291,13 +13291,8 @@
         "event_invitations_evolution": [
             {
                 "id": "35e5b9fe-3ee9-4d1b-83da-18b64af95619",
-<<<<<<< HEAD
-                "created": "2025-08-27 18:22:09.976884",
-                "lastchange": "2025-08-27 18:22:09.976884",
-=======
-                "created": "2025-09-04 09:18:31.731825",
-                "lastchange": "2025-09-04 09:18:31.731825",
->>>>>>> step_32_AI
+                "created": "2025-09-04 09:54:01.106603",
+                "lastchange": "2025-09-04 09:54:01.106603",
                 "createdby_id": null,
                 "changedby_id": null,
                 "rbacobject_id": null,

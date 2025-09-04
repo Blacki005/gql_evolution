@@ -18,10 +18,6 @@ strawberry-graphql
 aiodataloader
 pyjwt[crypto]
 
-nicegui
-fastmcp
-openai
-
 pyinstrument
 prometheus_client
 https://github.com/hrbolek/uoishelpers/archive/refs/heads/main.zip
