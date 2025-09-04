@@ -242,7 +242,7 @@ def GraphQLData(
     return view
 
 
-from mcp.types import SamplingMessage, CreateMessageRequestParams
+from mcp.types import SamplingMessage, CreateMessageRequestParams, TextContent
 
 def createOnSample(
     chatSession: ChatSession,
@@ -379,6 +379,17 @@ def createOnSample(
 
     return onSampling    
 
+def ComponentTextContent(
+    textContent: TextContent
+):
+    return ui.markdown(
+        content=textContent.text
+    )
+
+ComponentIndex = {
+    # "graphql": GraphQLData,
+    "text": ComponentTextContent,
+}
 
 @ui.page("/")
 async def index_page():
@@ -470,154 +481,25 @@ async def index_page():
 
                 tools = [tool.model_dump() for tool in mcp_tools]
 
-                # result = await router.route_and_call(
-                #     context=RouterContext(
-                #         user_message=question,
-                #         tools_json=tools
-                #     )
-                # )
-                # print(f"niceguid.page.tools {tools}")
-                tool_prompt = await mcpClient.get_prompt(
-                    name="get_use_tools",
-                    arguments={
-                        "tools": tools
-                    }
+                context = RouterContext(
+                    user_message=question,
+                    tools_json=tools
                 )
-                
-                toolChoicePromptLines = [msg.content.text for msg in tool_prompt.messages]
-                toolChoicePromptLines = '\n\n'.join(toolChoicePromptLines)
-                # await addAssistantMsg(toolChoicePromptLines)
-                log.push((
-                    "dotaz na LLM\n"
-                    f"{toolChoicePromptLines}"
-                ))
-                chat_str_response = await chatSession.ask(toolChoicePromptLines)
-                chat_str_response_json = {
-                    "action": "respond",
-                    "message": f"{chat_str_response}"
-                }
-                hasErrors = False
+                # print(f"niceguid.page.tools {tools}")
                 try:
-                # print(f"tool_prompt: {tool_prompt}")
-                    chat_str_response_json = json.loads(chat_str_response)
-                    # await addAssistantMsg((
-                    #     "Odpověď od asistenta v surové podobě\n"
-                    #     '```json\n'
-                    #     f'{chat_str_response_json}'
-                    #     '\n```'
-                    # ))
-                    log.push((
-                        f'{"#"*30}'
-                        "\n\n"
-                        "Odpověď od asistenta v surové podobě\n"
-                        '```json\n'
-                        f'{chat_str_response_json}'
-                        '\n```'
-                    ))
-                    # print(f"chat_str_response_json: {chat_str_response_json}")
-                    action = chat_str_response_json.get("action")
-                except Exception as e:
-                    hasErrors = True
-                    await addAssistantMsg((
-                        "Došlo k chybě při identifikaci vhodného nástroje \n"
-                        "```json\n"
-                        f"{chat_str_response}"
-                        "\n```\n"
-                        f"{chat_str_response.encode('utf-8').hex()}"
-                        "\n"
-                        f"{type(e)} {e}"
-                        f"{exception_to_markdown(e)}"
-                    ))
-                    # response.append(
-                    #         {"type": "md", "content": (
-                    #             "Došlo k chybě při identifikaci vhodného nástroje \n"
-                    #             f"{chat_str_response}"
-                    #             "\n"
-                    #             f"Exception {e}"
-                    #         )}
-                    #     )
-                if hasErrors: 
-                    await addAssistantMsg((
-                        "Došlo k chybě nevím jak pokračovat \n"
-                    ))
-                    return
-                action = chat_str_response_json.get("action")
-                print(f"action: {action}")
-                toolFromAction = next(filter(lambda tool: tool["name"] == action, tools), None)
-                if toolFromAction is not None:
-                    action = "tool"
-                    chat_str_response_json["action"] = action
-                    chat_str_response_json["tool"] = toolFromAction["name"]
-                    
-                if action != "tool":
-                    await addAssistantMsg((
-                        f'{chat_str_response_json.get("message")}'
-                        "\n"
-                        "```json\n"
-                        f"{chat_str_response}"
-                        "\n```\n"
-                        f"{chat_str_response.encode('utf-8').hex()}"
-                        "\n"
-                    ))
-                    # response.append(
-                    #     {"type": "md", "content": f'{chat_str_response_json["message"]}'}    
-                    # )
-                tries = 0
-                maxTries = 3
-                while tries < maxTries and action == "tool":
-                    tries += 1
-                    if tries > 1:
-                        await addAssistantMsg(f"Další pokus {tries} / {maxTries}")
-                        chat_str_response = await chatSession.ask('')
-                    try:
-                        tool_to_call = chat_str_response_json.get("tool")
-                        if tool_to_call is None:
-                            await chatSession.append_history((
-                                "Tvoje odpověď neobsahuje název nástroje, zkus to znovu"
-                            ))
-                        arguments = chat_str_response_json.get("arguments")
-                        print(f"while tool_to_call: {tool_to_call}, arguments: {arguments}")
-                        await addAssistantMsg((
-                            f"Vybral jsem  vhodný nástroj **`{tool_to_call}`**"
-                            "\ns parametry\n"
-                            "```json\n"
-                            f"{json.dumps(arguments)}"
-                            "\n```"
-                        ))
-                        # await addAssistantMsg(f"Volím nástroj {tool_to_call}.")
-                        tool_response = await mcpClient.call_tool(
-                            name=tool_to_call,
-                            arguments=arguments,
-                        )
-                        errors = None
-                        if tool_response.structured_content is not None:
-                            errors = tool_response.structured_content.get("errors")
-                            
-                        if errors is not None:
-                            hasErrors = True
-                            toolDefinition = next(filter(lambda tool: tool["name"] == tool_to_call, tools), None)
-                            chatSession.append_history({
-                                "role": "user", 
-                                "content": (
-                                    "volani nástroje mi hlásí chybu, zkus to opravit\n\n"
-                                    "definice nástroje, který jsi doporučil volat je\n\n"
-                                    f"{json.dumps(toolDefinition)}"
-                                    "\n\nchyba, kterou to hlásí je\n\n"
-                                    f"{e}"
-                                )
-                            })
-                            await addAssistantMsg((
-                                    "Doslo k chybe pri volani nastroje" 
-                                    f"{chat_str_response}"
-                                    "\n"
-                                    "nástroj hlásí chybu\n"
-                                    f"{errors}"
-                                ))    
-                            continue
+                    context_result: RouterContext = await router.route_and_call(
+                       context=context 
+                    )
+                    if tool_response := context_result.result:
 
-                        tool_response_text = "\n".join([block.text for block in tool_response.content])
-                        # vrat mi seznam skupin
-                        await addAssistantMsg(tool_response_text)
+                        if tool_response_content := tool_response.content:
+                            for content_block in tool_response_content:
+                                Component = ComponentIndex.get(
+                                    content_block.type
+                                )
+                                if Component:
+                                    with message_container:
+                                        Component(content_block)
 
                         if tool_response.structured_content is not None:
                             graphql = tool_response.structured_content.get("graphql")
@@ -633,37 +515,221 @@ async def index_page():
                                     )
                             else:
                                 await addAssistantMsg((
-                                    "## Odpověď jako json\n\n"
+                                    "## Odpověď (structured_content) jako json\n\n"
                                     "```json\n"
-                                    f"{tool_response}"
+                                    f"{json.dumps(tool_response.structured_content, indent=2, ensure_ascii=False)}"
                                     "\n```"
                                 ))
-                        # response.append(
-                        #     {"type": "md", "content": tool_response_text}    
-                        # )
-                        tries = maxTries
-                        break
-                    except Exception as e:
-                        hasErrors = True
-                        toolDefinition = next(filter(lambda tool: tool["name"] == tool_to_call, tools), None)
-                        await chatSession.append_history({
-                            "role": "user", 
-                            "content": (
-                                "volani nástroje mi hlásí chybu, zkus to opravit\n\n"
-                                "definice nástroje, který jsi doporučil volat je\n\n"
-                                f"{json.dumps(toolDefinition)}"
-                                "\n\nchyba, kterou to hlásí je\n\n"
-                                f"{type(e)}: {e}"
-                            )
-                        })
+
+                    
+                        
+                    elif direct_response := context_result.meta.get("router_final_answer"):
                         await addAssistantMsg((
-                                f"Doslo k chybe pri volani nastroje {tries}" 
-                                "\n\n"
-                                f"{chat_str_response}"
-                                "\n"
-                                f"{type(e)} {e}"
-                                f"{exception_to_markdown(e)}"
-                            ))
+                            f"{direct_response}"
+                            "\n"    
+                        ))
+                    elif question_for_user := context_result.meta.get("router_question"):
+                        await addAssistantMsg((
+                            f"{question_for_user}"
+                            "\n"    
+                        ))
+                    else:
+                        await addAssistantMsg((
+                            "Neco je fakt spatne\n\n"
+                            "```json\n"
+                            f"{json.dumps(context_result.meta, indent=2, ensure_ascii=False)}"
+                            "\n```\n"
+                        ))
+                except Exception as e:
+                    await addAssistantMsg((
+                        f"Doslo k chybe pri volani nastroje {context.attempt}" 
+                        "\n\n"
+                        f"{context.error}"
+                        "\n"
+                        f"{type(e)} {e}"
+                        f"{exception_to_markdown(e)}"
+                    ))
+                
+                # toolChoicePromptLines = [msg.content.text for msg in tool_prompt.messages]
+                # toolChoicePromptLines = '\n\n'.join(toolChoicePromptLines)
+                # # await addAssistantMsg(toolChoicePromptLines)
+                # log.push((
+                #     "dotaz na LLM\n"
+                #     f"{toolChoicePromptLines}"
+                # ))
+                # chat_str_response = await chatSession.ask(toolChoicePromptLines)
+                # chat_str_response_json = {
+                #     "action": "respond",
+                #     "message": f"{chat_str_response}"
+                # }
+                # hasErrors = False
+                # try:
+                # # print(f"tool_prompt: {tool_prompt}")
+                #     chat_str_response_json = json.loads(chat_str_response)
+                #     # await addAssistantMsg((
+                #     #     "Odpověď od asistenta v surové podobě\n"
+                #     #     '```json\n'
+                #     #     f'{chat_str_response_json}'
+                #     #     '\n```'
+                #     # ))
+                #     log.push((
+                #         f'{"#"*30}'
+                #         "\n\n"
+                #         "Odpověď od asistenta v surové podobě\n"
+                #         '```json\n'
+                #         f'{chat_str_response_json}'
+                #         '\n```'
+                #     ))
+                #     # print(f"chat_str_response_json: {chat_str_response_json}")
+                #     action = chat_str_response_json.get("action")
+                # except Exception as e:
+                #     hasErrors = True
+                #     await addAssistantMsg((
+                #         "Došlo k chybě při identifikaci vhodného nástroje \n"
+                #         "```json\n"
+                #         f"{chat_str_response}"
+                #         "\n```\n"
+                #         f"{chat_str_response.encode('utf-8').hex()}"
+                #         "\n"
+                #         f"{type(e)} {e}"
+                #         f"{exception_to_markdown(e)}"
+                #     ))
+                #     # response.append(
+                #     #         {"type": "md", "content": (
+                #     #             "Došlo k chybě při identifikaci vhodného nástroje \n"
+                #     #             f"{chat_str_response}"
+                #     #             "\n"
+                #     #             f"Exception {e}"
+                #     #         )}
+                #     #     )
+                # if hasErrors: 
+                #     await addAssistantMsg((
+                #         "Došlo k chybě nevím jak pokračovat \n"
+                #     ))
+                #     return
+                # action = chat_str_response_json.get("action")
+                # print(f"action: {action}")
+                # toolFromAction = next(filter(lambda tool: tool["name"] == action, tools), None)
+                # if toolFromAction is not None:
+                #     action = "tool"
+                #     chat_str_response_json["action"] = action
+                #     chat_str_response_json["tool"] = toolFromAction["name"]
+                    
+                # if action != "tool":
+                #     await addAssistantMsg((
+                #         f'{chat_str_response_json.get("message")}'
+                #         "\n"
+                #         "```json\n"
+                #         f"{chat_str_response}"
+                #         "\n```\n"
+                #         f"{chat_str_response.encode('utf-8').hex()}"
+                #         "\n"
+                #     ))
+                #     # response.append(
+                #     #     {"type": "md", "content": f'{chat_str_response_json["message"]}'}    
+                #     # )
+                # tries = 0
+                # maxTries = 3
+                # while tries < maxTries and action == "tool":
+                #     tries += 1
+                #     if tries > 1:
+                #         await addAssistantMsg(f"Další pokus {tries} / {maxTries}")
+                #         chat_str_response = await chatSession.ask('')
+                #     try:
+                #         tool_to_call = chat_str_response_json.get("tool")
+                #         if tool_to_call is None:
+                #             await chatSession.append_history((
+                #                 "Tvoje odpověď neobsahuje název nástroje, zkus to znovu"
+                #             ))
+                #         arguments = chat_str_response_json.get("arguments")
+                #         print(f"while tool_to_call: {tool_to_call}, arguments: {arguments}")
+                #         await addAssistantMsg((
+                #             f"Vybral jsem  vhodný nástroj **`{tool_to_call}`**"
+                #             "\ns parametry\n"
+                #             "```json\n"
+                #             f"{json.dumps(arguments)}"
+                #             "\n```"
+                #         ))
+                #         # await addAssistantMsg(f"Volím nástroj {tool_to_call}.")
+                #         tool_response = await mcpClient.call_tool(
+                #             name=tool_to_call,
+                #             arguments=arguments,
+                #         )
+                #         errors = None
+                #         if tool_response.structured_content is not None:
+                #             errors = tool_response.structured_content.get("errors")
+                            
+                #         if errors is not None:
+                #             hasErrors = True
+                #             toolDefinition = next(filter(lambda tool: tool["name"] == tool_to_call, tools), None)
+                #             chatSession.append_history({
+                #                 "role": "user", 
+                #                 "content": (
+                #                     "volani nástroje mi hlásí chybu, zkus to opravit\n\n"
+                #                     "definice nástroje, který jsi doporučil volat je\n\n"
+                #                     f"{json.dumps(toolDefinition)}"
+                #                     "\n\nchyba, kterou to hlásí je\n\n"
+                #                     f"{e}"
+                #                 )
+                #             })
+                #             await addAssistantMsg((
+                #                     "Doslo k chybe pri volani nastroje" 
+                #                     f"{chat_str_response}"
+                #                     "\n"
+                #                     "nástroj hlásí chybu\n"
+                #                     f"{errors}"
+                #                 ))    
+                #             continue
+
+                #         tool_response_text = "\n".join([block.text for block in tool_response.content])
+                #         # vrat mi seznam skupin
+                #         await addAssistantMsg(tool_response_text)
+
+                #         if tool_response.structured_content is not None:
+                #             graphql = tool_response.structured_content.get("graphql")
+                #             if graphql is not None:
+                #                 with message_container:
+                #                     GraphQLData(
+                #                         gqlclient=gqlClient, 
+                #                         query=graphql.get("query"),
+                #                         variables=graphql.get("variables"),
+                #                         result=graphql.get("result"),
+                #                         metadata=tool_response.structured_content,
+                #                         autoload=False
+                #                     )
+                #             else:
+                #                 await addAssistantMsg((
+                #                     "## Odpověď jako json\n\n"
+                #                     "```json\n"
+                #                     f"{tool_response}"
+                #                     "\n```"
+                #                 ))
+                #         # response.append(
+                #         #     {"type": "md", "content": tool_response_text}    
+                #         # )
+                #         tries = maxTries
+                #         break
+                #     except Exception as e:
+                #         hasErrors = True
+                #         toolDefinition = next(filter(lambda tool: tool["name"] == tool_to_call, tools), None)
+                #         await chatSession.append_history({
+                #             "role": "user", 
+                #             "content": (
+                #                 "volani nástroje mi hlásí chybu, zkus to opravit\n\n"
+                #                 "definice nástroje, který jsi doporučil volat je\n\n"
+                #                 f"{json.dumps(toolDefinition)}"
+                #                 "\n\nchyba, kterou to hlásí je\n\n"
+                #                 f"{type(e)}: {e}"
+                #             )
+                #         })
+                #         await addAssistantMsg((
+                #                 f"Doslo k chybe pri volani nastroje {tries}" 
+                #                 "\n\n"
+                #                 f"{chat_str_response}"
+                #                 "\n"
+                #                 f"{type(e)} {e}"
+                #                 f"{exception_to_markdown(e)}"
+                #             ))
                         # response.append(
                         #     {"type": "md", "content": (
                         #         f"Doslo k chybe {chat_str_response}"
@@ -808,3 +874,13 @@ async def index_page():
             )
 
 # endregion
+
+
+"""
+navrhni mi formular pro zadost student s polozkami
+- jmeno a prijmeni studenta
+- zneni zadosti
+- vyjadreni nekolika osob k zadosti
+  - kdo se vyjadril
+  - jake vyjadreni napsal
+"""

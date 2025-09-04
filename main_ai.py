@@ -81,7 +81,7 @@ class ChatSession:
     ) -> str:
         await self.append_history({"role": "user", "content": user_text})
         history: list = await self.get_history()
-        history.insert(0, self.system_prompt)
+        # history.insert(0, self.system_prompt)
         resp = await self.azureCompletions.create(
             model=model_name,          # = deployment name
             messages=history,
@@ -130,7 +130,7 @@ class FilterType:
 class MCPRouter:
 
     def __init__(self, mcpClient):
-        self._filters = dict[str, list[typing.Callable]] = {}
+        self._filters: dict[str, list[typing.Callable]] = {}
         self.mcpClient = mcpClient
 
     def filter(self, *, filter_type: str):
@@ -373,7 +373,7 @@ class MCPRouter:
         *,
         planner: typing.Callable[[RouterContext], typing.Awaitable[RouterContext]] = None,
         invoker: typing.Callable[[RouterContext], typing.Awaitable[typing.Any]] = None,
-    ) -> typing.Any:
+    ) -> RouterContext:
         """
         planner: naplní context.selected_tool + context.arguments (LLM routing apod.)
         invoker: provede vlastní volání MCP nástroje dle context.selected_tool/arguments
@@ -392,7 +392,8 @@ class MCPRouter:
 
         context = await self._run_pipeline(FilterType.ROUTE_SELECT, context, _final_route)
         if not context.selected_tool:
-            raise RuntimeError("Router did not select a tool.")
+            return context
+            # raise RuntimeError("Router did not select a tool.")
 
         # 2) VOLÁNÍ NÁSTROJE + RETRY (filtry před/po / na chybu)
         for attempt in range(context.max_retries + 1):
@@ -414,7 +415,7 @@ class MCPRouter:
                     return ctx.result
                 await self._run_pipeline(FilterType.TOOL_RESULT, context, _final_result)
 
-                return context.result  # hotovo
+                return context  # hotovo
 
             except Exception as ex:
                 # ulož chybu do contextu
