@@ -240,15 +240,17 @@ nicegui.ui.run_with(
 # endregion
 
 # region mcp
-from main_mcp import mcp_app, Client
+from main_mcp import mcp_app, mcp_app_sse, Client
 innerlifespan = mcp_app.lifespan
 
-app.mount(path="/mcp", app=mcp_app)
+app.mount(path="/mcp", app=mcp_app_sse)
+app.mount(path="/mcp_no_sse", app=mcp_app)
+
 
 @app.get("/testmcp")
 async def test_mcp() -> dict:
     # client = Client(mcp_app)
-    client = Client("http://localhost:8002/mcp")
+    client = Client("http://localhost:8002/mcp_no_sse")
     result = {}
     async with client:
         result["tool.response"] = await client.call_tool("echo", {"text": "hello"})

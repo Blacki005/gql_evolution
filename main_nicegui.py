@@ -13,7 +13,7 @@ from src.GraphTypeDefinitions import schema
 from main_ai import ChatSession, MCPRouter, RouterContext, FilterType
 import fastmcp
 
-MCPURL = "http://localhost:8002/mcp"
+MCPURL = "http://localhost:8002/mcp_no_sse"
 
 import traceback
 

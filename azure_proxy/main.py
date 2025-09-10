@@ -1,10 +1,13 @@
 import os, json, hashlib, asyncio, time
 from typing import Optional
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, PlainTextResponse
 import httpx
+
+# from db import init_db
 
 # ==== Konfigurace z env ====
 UPSTREAM_ACCOUNT = os.getenv("AZURE_COGNITIVE_ACCOUNT_NAME", "")
@@ -36,7 +39,65 @@ except Exception:
         "gpt-4o-mini": "summarization-deployment",
     }
 
+# region Usage Logs
 DEFAULT_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEFAULT_DEPLOYMENT", "summarization-deployment")  # fallback, když model není v mapě
+
+USAGE_LOG_PATH = os.getenv("USAGE_LOG_PATH", "")  # když nastavíš cestu, zapisuje se JSONL
+USAGE_LOG_STDOUT = os.getenv("USAGE_LOG_STDOUT", "true").lower() == "true"
+
+_usage_lock = asyncio.Lock()
+def _now_iso():
+    import datetime as _dt
+    return _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+async def log_usage_record(record: dict):
+    """Zapíše jednu řádku s usage do JSONL + volitelně na stdout."""
+    line = json.dumps(record, ensure_ascii=False)
+    if USAGE_LOG_STDOUT:
+        print(f"[USAGE] {line}")
+    if USAGE_LOG_PATH:
+        async with _usage_lock:
+            with open(USAGE_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    return record
+
+def make_usage_record(
+    *,
+    route: str,
+    request: Request | None,
+    deployment: str | None,
+    # model: str | None,
+    stream: bool,
+    status: int | None,
+    usage: dict | None,
+    idempotency_key: str | None,
+    upstream_headers: dict | None = None,
+    extra: dict | None = None,
+) -> dict:
+    rec = {
+        "ts": _now_iso(),
+        "route": route,
+        "deployment": deployment,
+        # "model": model,
+        "stream": bool(stream),
+        "status": status,
+        "usage": usage or {},
+        "idempotency_key": idempotency_key,
+        "client_ip": getattr(request.client, "host", None) if request else None,
+        "req_x_request_id": request.headers.get("X-Request-Id") if request else None,
+    }
+    if upstream_headers:
+        # Azure/OpenAI často vrací X-Request-Id, X-Ratelimit*, apod.
+        rec["upstream_request_id"] = upstream_headers.get("x-request-id") or upstream_headers.get("X-Request-Id")
+        rec["ratelimit_remaining_tokens"] = upstream_headers.get("x-ratelimit-remaining-tokens")
+        rec["ratelimit_limit_tokens"] = upstream_headers.get("x-ratelimit-limit-tokens")
+    if extra:
+        rec.update(extra)
+    return rec
+
+
+# endregion
+
 
 
 # --- POMOCNÉ FUNKCE PRO OPENAI KOMPAT ---
@@ -73,9 +134,18 @@ def azure_responses_url(deployment: str) -> str:
 # ==== HTTP klient ====
 client = httpx.AsyncClient(timeout=httpx.Timeout(TIMEOUT_SECS, connect=10.0))
 
-app = FastAPI(title="Azure OpenAI Reverse Proxy")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # await init_db()
+    yield
+    await client.aclose()
 
-def require_auth(request: Request):
+app = FastAPI(
+    title="Azure OpenAI Reverse Proxy",
+    lifespan=lifespan
+)
+
+async def require_auth(request: Request):
     if PROXY_TOKEN:
         token = request.headers.get("X-Proxy-Token")
         if token != PROXY_TOKEN:
@@ -123,7 +193,13 @@ def log_res(status: int, usage: Optional[dict]):
     print(f"[RES] status={status} usage={usage or {}}")
 
 def extract_usage(json_obj: dict) -> Optional[dict]:
-    return json_obj.get("usage")
+    if not isinstance(json_obj, dict):
+        return None
+    return (
+        json_obj.get("usage")
+        or (json_obj.get("response") or {}).get("usage")
+        or (json_obj.get("output") or {}).get("usage")
+    )
 
 def upstream_headers(request: Request, idemp: str | None) -> dict:
     # klient nemusí posílat Azure API key; proxy vloží vlastní
@@ -139,76 +215,270 @@ def upstream_headers(request: Request, idemp: str | None) -> dict:
         h["X-Request-Id"] = request.headers["X-Request-Id"]
     return h
 
-async def forward_nonstream(url: str, headers: dict, body: dict) -> Response:
-    r = await client.post(url, headers=headers, json=body)
-    # retry vyšší vrstvě neřešíme tady – řeší route
-    try:
-        data = r.json()
-    except Exception:
-        data = None
-    log_res(r.status_code, extract_usage(data or {}))
-    # předej JSON/HTTP status dál
-    if data is not None:
-        return JSONResponse(status_code=r.status_code, content=data)
-    return PlainTextResponse(status_code=r.status_code, content=r.text)
+async def forward_nonstream(
+    request: Request,
+    deployment: str,
+    url: str, 
+    headers: dict, 
+    body: dict, 
+    idempotency_key: str,
+    routelabel: str="unknown"
+) -> Response:
+    # non-stream s retry
+    last_exc = None
+    for delay in [0.0, *[d async for d in backoff_delays(3)]]:
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            r = await client.post(url, headers=headers, json=body)
+            if not should_retry(r.status_code):
+                try:
+                    data = r.json()
+                except Exception:
+                    data = None
+                usage = extract_usage(data or {})
+                usage_record = make_usage_record(
+                    route=routelabel,
+                    request=request,
+                    deployment=deployment,
+                    stream=False,
+                    status=r.status_code,
+                    usage=usage,
+                    # route=routelabel,
+                    idempotency_key=idempotency_key,
+                    upstream_headers=r.headers
+                )
+                await log_usage_record(usage_record)
+                log_res(f"OPENAI {routelabel} {r.status_code}", usage=usage)
+                if data is not None:
+                    return JSONResponse(status_code=r.status_code, content=data)
+                return PlainTextResponse(status_code=r.status_code, content=r.text)
+            else:
+                last_exc = f"Upstream status {r.status_code}, retrying…"
+        except httpx.HTTPError as e:
+            last_exc = f"HTTP error: {e}"
+    raise HTTPException(status_code=502, detail=f"Upstream failed after retries: {last_exc}")
 
-async def stream_generator(url: str, headers: dict, body: dict):
-    async with client.stream("POST", url, headers=headers, json=body) as r:
-        async for chunk in r.aiter_bytes():
-            yield chunk
+# async def stream_generator(url: str, headers: dict, body: dict):
+#     async with client.stream("POST", url, headers=headers, json=body) as r:
+#         async for chunk in r.aiter_bytes():
+#             yield chunk
 
-async def forward_stream(url: str, headers: dict, body: dict) -> Response:
-    # zachovej event-stream
-    return StreamingResponse(stream_generator(url, headers, body), media_type="text/event-stream")
+# async def forward_stream(url: str, headers: dict, body: dict) -> Response:
+#     # zachovej event-stream
+#     return StreamingResponse(stream_generator(url, headers, body), media_type="text/event-stream")
+
+
+async def forward_stream_with_usage(
+    url: str, 
+    headers: dict, 
+    body: dict, 
+    *,
+    route: str, 
+    request: Request, 
+    deployment: str | None,
+    # model: str | None, 
+    idempotency_key: str | None,
+    parse_responses_usage: bool
+):
+    async def _gen():
+        usage_holder = None
+        usage_counter = 0
+        status_code = None
+        upstream_headers = {}
+        text_buf = ""
+
+        async with client.stream("POST", url, headers=headers, json=body) as r:
+            status_code = r.status_code
+            upstream_headers = dict(r.headers)
+
+            async for chunk in r.aiter_bytes():
+                # pošli dál
+                usage_counter += len(chunk)
+                yield chunk
+
+                if not parse_responses_usage:
+                    continue
+
+                # zkus poskládat SSE bloky a číst "data: {...}"
+                try:
+                    text_buf += chunk.decode("utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                while "\n\n" in text_buf:
+                    block, text_buf = text_buf.split("\n\n", 1)
+                    for line in block.splitlines():
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            evt = json.loads(payload)
+                        except Exception:
+                            continue
+                        # OpenAI/Azure Responses: zakončovací event nese usage
+                        if isinstance(evt, dict) and evt.get("type") == "response.completed":
+                            usage_holder = (evt.get("response") or {}).get("usage") or evt.get("usage") or {"usage_counter": usage_counter}
+
+        # zapiš usage/metu po skončení streamu
+        try:
+            await log_usage_record(
+                make_usage_record(
+                    route=route, 
+                    request=request, 
+                    deployment=deployment, 
+                    # model=model,
+                    stream=True, 
+                    status=status_code, 
+                    usage=usage_holder,
+                    idempotency_key=idempotency_key, 
+                    upstream_headers=upstream_headers
+                )
+            )
+        except Exception as _e:
+            print(f"[USAGE WARN] {type(_e).__name__}: {_e}")
+
+    return StreamingResponse(
+        _gen(), 
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 def should_retry(status: int) -> bool:
     return status in (429, 500, 502, 503, 504)
 
-# ============= ROUTES =============
 
-@app.post("/openai/deployments/{deployment}/chat/completions")
-async def chat_completions(deployment: str, request: Request):
-    require_auth(request)
-    print(f"chat_completions/{deployment}")
+
+async def openai_v1_chat_completions_general(
+    request: Request, 
+    useforce: bool, 
+    deployment: str = None,
+    endpoint: str = "chat",
+    routelabel: str=""
+):
+    """
+    Přijme OpenAI styl (model=..., messages=[...]) a přesměruje na Azure chat/completions.
+    """
+    if not OPENAI_COMPAT_ENABLED:
+        raise HTTPException(status_code=404, detail="OpenAI-compatible mode disabled")
+
+    await require_auth(request)
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    body = maybe_force_json_response(body)
-    idemp = request.headers.get("Idempotency-Key") or gen_idempotency_key(body)
+    model = body.get("model")
+    if model:
+        deployment = resolve_deployment_from_model(model)    
+    elif deployment is None:
+        if isinstance(model, str) and model.strip():
+            deployment = resolve_deployment_from_model(model)
+        else:
+            raise HTTPException(status_code=400, detail="Missing 'model' (or explicit deployment)")
+    
+    if useforce and endpoint == "chat":
+        body = maybe_force_json_response(body)  # volitelný forcing JSON output
+    idempotency_key = request.headers.get("Idempotency-Key") or gen_idempotency_key(body)
 
-    log_req(deployment, body)
-    url = build_upstream_url(deployment)
-    headers = upstream_headers(request, idemp)
+    # Log a hlavičky (vezmeme Azure api-key, ne Authorization)
+    log_req(f"OPENAI {routelabel} -> {deployment}", body)
+    # headers = {
+    #     "api-key": UPSTREAM_API_KEY,
+    #     "Content-Type": "application/json",
+    #     "Idempotency-Key": idemp,
+    # }
+    headers = upstream_headers(request, idempotency_key)
+    if endpoint == "responses":
+        url = azure_responses_url(deployment)
+    else:
+        # url = azure_chat_url(deployment)
+        url = build_upstream_url(deployment)
 
-    # retry smyčka pro non-stream; pro stream uděláme jediný pokus (SSE a retry se hůř skládá)
+    # stream?
     if body.get("stream"):
-        return await forward_stream(url, headers, body)
+        return await forward_stream_with_usage(
+            url, 
+            headers, 
+            body,
+            request=request,
+            route=routelabel,
+            deployment=deployment,
+            idempotency_key=idempotency_key,
+            parse_responses_usage=True
+        )
+    return await forward_nonstream(
+        request=request,
+        deployment=deployment,
+        url=url,
+        headers=headers,
+        body=body,
+        idempotency_key=idempotency_key,
+        routelabel=routelabel
+    )
 
-    last_exc = None
-    # první pokus + max 3 retry
-    for delay in [0.0, *[d async for d in backoff_delays(3)]]:
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            resp = await client.post(url, headers=headers, json=body)
-            if not should_retry(resp.status_code):
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = None
-                log_res(resp.status_code, extract_usage(data or {}))
-                if data is not None:
-                    return JSONResponse(status_code=resp.status_code, content=data)
-                return PlainTextResponse(status_code=resp.status_code, content=resp.text)
-            else:
-                last_exc = f"Upstream status {resp.status_code}, retrying…"
-        except httpx.HTTPError as e:
-            last_exc = f"HTTP error: {e}"
+# ============= ROUTES =============
 
-    # po vyčerpání
-    raise HTTPException(status_code=502, detail=f"Upstream failed after retries: {last_exc}")
+@app.post("/openai/deployments/{deployment}/chat/completions")
+async def chat_completions(deployment: str, request: Request):
+    return await openai_v1_chat_completions_general(
+        request=request,
+        useforce=True,
+        deployment=deployment,
+        endpoint="chat",
+        routelabel="chat_completions",
+    ) 
+
+# ---------- OpenAI-compatible: /v1/models ----------
+@app.get("/v1/models")
+@app.get("/models")  # volitelně alias
+async def list_models_openai():
+    """
+    Vrátí seznam 'modelů' podle klíčů v OPENAI_COMPAT_MODEL_MAP.
+    OpenAI vrací object=list a položky s object=model.
+    """
+    items = []
+    for mid in (MODEL_MAP.keys() or []):
+        items.append({"id": mid, "object": "model", "created": 0, "owned_by": "azure-proxy"})
+    # fallback: když není mapa, ale je DEFAULT_DEPLOYMENT, ukaž aspoň 1 id
+    if not items and DEFAULT_DEPLOYMENT:
+        items = [{"id": "gpt-azure", "object": "model", "created": 0, "owned_by": "azure-proxy"}]
+    result = {"object": "list", "data": items}
+    print(f"list_models_openai: {json.dumps(result, indent=2)}")
+    return result
+
+# ---------- OpenAI-compatible: /v1/chat/completions ----------
+@app.post("/v1/chat/completions")
+@app.post("/chat/completions")
+async def openai_v1_chat_completions(request: Request):
+    """
+    Přijme OpenAI styl (model=..., messages=[...]) a přesměruje na Azure chat/completions.
+    """
+    return await openai_v1_chat_completions_general(
+        request=request,
+        useforce=True,
+        endpoint="chat",
+        routelabel="openai_v1_chat_completions"
+    )
+
+# ---------- OpenAI-compatible: /v1/responses ----------
+@app.post("/v1/responses")
+@app.post("/responses")
+async def openai_v1_responses(request: Request):
+    """
+    OpenAI Responses API (model=..., input=[...]).
+    Přesměruje na Azure /responses (2024-12-01-preview a novější).
+    """
+    return await openai_v1_chat_completions_general(
+        request=request,
+        useforce=False,
+        endpoint="responses",
+        routelabel="openai_v1_responses"
+    )
+    
 
 @app.get("/healthcheck")
 async def healthcheck():
@@ -243,153 +513,46 @@ async def llmtest(
         )
     asjson = resp.model_dump()
     return asjson
-    
-
-# ---------- OpenAI-compatible: /v1/models ----------
-@app.get("/v1/models")
-@app.get("/models")  # volitelně alias
-async def list_models_openai():
-    """
-    Vrátí seznam 'modelů' podle klíčů v OPENAI_COMPAT_MODEL_MAP.
-    OpenAI vrací object=list a položky s object=model.
-    """
-    items = []
-    for mid in (MODEL_MAP.keys() or []):
-        items.append({"id": mid, "object": "model", "created": 0, "owned_by": "azure-proxy"})
-    # fallback: když není mapa, ale je DEFAULT_DEPLOYMENT, ukaž aspoň 1 id
-    if not items and DEFAULT_DEPLOYMENT:
-        items = [{"id": "gpt-azure", "object": "model", "created": 0, "owned_by": "azure-proxy"}]
-    result = {"object": "list", "data": items}
-    print(f"list_models_openai: {json.dumps(result, indent=2)}")
-    return result
-
-# ---------- OpenAI-compatible: /v1/chat/completions ----------
-@app.post("/v1/chat/completions")
-@app.post("/chat/completions")
-async def openai_v1_chat_completions(request: Request):
-    """
-    Přijme OpenAI styl (model=..., messages=[...]) a přesměruje na Azure chat/completions.
-    """
-    if not OPENAI_COMPAT_ENABLED:
-        raise HTTPException(status_code=404, detail="OpenAI-compatible mode disabled")
-
-    require_auth(request)
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise HTTPException(status_code=400, detail="Missing 'model' in body")
-
-    deployment = resolve_deployment_from_model(model)
-    body = maybe_force_json_response(body)  # volitelný forcing JSON output
-    idemp = request.headers.get("Idempotency-Key") or gen_idempotency_key(body)
-
-    # Log a hlavičky (vezmeme Azure api-key, ne Authorization)
-    log_req(f"OPENAI chat -> {deployment}", body)
-    headers = {
-        "api-key": UPSTREAM_API_KEY,
-        "Content-Type": "application/json",
-        "Idempotency-Key": idemp,
-    }
-    url = azure_chat_url(deployment)
-
-    # stream?
-    if body.get("stream"):
-        return await forward_stream(url, headers, body)
-
-    # non-stream s retry (použijeme tvůj existující vzor)
-    last_exc = None
-    for delay in [0.0, *[d async for d in backoff_delays(3)]]:
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            r = await client.post(url, headers=headers, json=body)
-            if not should_retry(r.status_code):
-                try:
-                    data = r.json()
-                except Exception:
-                    data = None
-                log_res(f"OPENAI chat {r.status_code}", extract_usage(data or {}))
-                if data is not None:
-                    return JSONResponse(status_code=r.status_code, content=data)
-                return PlainTextResponse(status_code=r.status_code, content=r.text)
-            else:
-                last_exc = f"Upstream status {r.status_code}, retrying…"
-        except httpx.HTTPError as e:
-            last_exc = f"HTTP error: {e}"
-    raise HTTPException(status_code=502, detail=f"Upstream failed after retries: {last_exc}")
-
-# ---------- OpenAI-compatible: /v1/responses ----------
-@app.post("/v1/responses")
-@app.post("/responses")
-async def openai_v1_responses(request: Request):
-    """
-    OpenAI Responses API (model=..., input=[...]).
-    Přesměruje na Azure /responses (2024-12-01-preview a novější).
-    """
-    if not OPENAI_COMPAT_ENABLED:
-        raise HTTPException(status_code=404, detail="OpenAI-compatible mode disabled")
-
-    require_auth(request)
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise HTTPException(status_code=400, detail="Missing 'model' in body")
-
-    deployment = resolve_deployment_from_model(model)
-    idemp = request.headers.get("Idempotency-Key") or gen_idempotency_key(body)
-
-    log_req(f"OPENAI responses -> {deployment}", body)
-    headers = {
-        "api-key": UPSTREAM_API_KEY,
-        "Content-Type": "application/json",
-        "Idempotency-Key": idemp,
-    }
-    url = azure_responses_url(deployment)
-
-    if body.get("stream"):
-        return await forward_stream(url, headers, body)
-
-    last_exc = None
-    for delay in [0.0, *[d async for d in backoff_delays(3)]]:
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            r = await client.post(url, headers=headers, json=body)
-            if not should_retry(r.status_code):
-                try:
-                    data = r.json()
-                except Exception:
-                    data = None
-                log_res(f"OPENAI responses {r.status_code}", extract_usage(data or {}))
-                if data is not None:
-                    return JSONResponse(status_code=r.status_code, content=data)
-                return PlainTextResponse(status_code=r.status_code, content=r.text)
-            else:
-                last_exc = f"Upstream status {r.status_code}, retrying…"
-        except httpx.HTTPError as e:
-            last_exc = f"HTTP error: {e}"
-    raise HTTPException(status_code=502, detail=f"Upstream failed after retries: {last_exc}")
 
 @app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    print(f"http.middleware base_url={request.base_url}")
-    start_time = time.perf_counter()
-    response = await call_next(request)
-    process_time = time.perf_counter() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
+async def access_log(request: Request, call_next):
+    # --- request info ---
+    url = str(request.url)                   # plná URL
+    path = request.url.path                  # jen /cesta
+    query = request.url.query                # bez '?'
+    method = request.method
+    scheme = request.scope.get("scheme")
+    http_ver = request.scope.get("http_version")
+    client_host, client_port = (request.client.host, request.client.port) if request.client else (None, None)
+    ua = request.headers.get("user-agent", "")
+    xff = request.headers.get("x-forwarded-for")
+    req_id = request.headers.get("x-request-id")
+
+    print(f"[REQ] {method} {url} hv={http_ver} client={client_host}:{client_port} ua={ua[:80]} xff={xff} req_id={req_id}")
+
+    # --- timing ---
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        dur = (time.perf_counter() - start)
+    # --- response info ---
+    status = getattr(response, "status_code", None)
+    clen = response.headers.get("content-length")
+    ctype = response.headers.get("content-type")
+    upstream_id = response.headers.get("x-request-id")  # pokud ho upstream přepošleš
+
+    # přidej header s časem
+    response.headers["X-Process-Time"] = f"{dur:.6f}"
+
+    print(f"[RES] {method} {path}{'?' + query if query else ''} -> {status} len={clen} type={ctype} t={dur:.3f}s upstream_id={upstream_id}")
     return response
 
-# volitelně předej i jiné cesty, pokud bys chtěl (např. /images, /responses, atd.)
-# … můžeš doplnit další route stejně jako výše
+# from gui import init_gui
+# init_gui(app)
 
+# from management import router
+# app.include_router(router)
 if __name__ == "__main__":
     # Pokud chceš TLS přímo v uvicorn:
     # uvicorn.run(app, host=PROXY_BIND, port=PROXY_PORT, ssl_keyfile="key.pem", ssl_certfile="cert.pem")

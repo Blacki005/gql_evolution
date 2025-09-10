@@ -4,11 +4,35 @@ import dataclasses
 
 # region mcp
 import fastmcp
-from fastmcp import FastMCP, Client
 from fastmcp.tools.tool import ToolResult, TextContent
 
-# MCP server instance
-mcp = FastMCP("My MCP Server")
+from .mcpserver import mcp
+from main_ai import azureCompletions
+
+import main_mcp.prompts
+import main_mcp.resources
+import main_mcp.tools
+
+# from fastmcp.resources import ResourceRegistry
+# async def fallback_sample(
+#         messages: str | list[str | SamplingMessage],
+#         system_prompt: str | None = None,
+#         include_context: IncludeContext | None = None,
+#         temperature: float | None = None,
+#         max_tokens: int | None = None,
+#         model_preferences = None,
+#     ):
+#     resp = await azureCompletions.create(
+#             model="gtp-5-nano",          # = deployment name
+#             messages=messages,
+#             temperature=temperature,
+#             max_tokens=max_tokens,
+#         )
+#     result = TextContent(
+#         type="text",
+#         text=resp.choices[0].message.content
+#     )
+#     return result
 
 # Definice toolu
 # @mcp.tool(
@@ -867,6 +891,47 @@ output:
 #         }
 #     )
 
+@mcp.tool(
+    description=(
+        "Returns complete list of availlable graphql types from graqphql endpoint with description. "
+        "This allows to derive which types the user is talking about."
+    )
+)
+async def get_complete_gql_types_list(
+    ctx: fastmcp.Context
+):
+    result = await get_graphql_types.fn(ctx)
+    return result
+
+@mcp.tool(
+    description=(
+        "Returns a graphql query base on required graphql types with rich description of use. "
+    )
+)
+async def get_query_for_types(
+    types: typing.Annotated[
+        str,
+        (
+            "list of graphql types delimited by comma",
+            "An example is \n\n"
+            "UserGQLModel,GroupGQLModel"
+        )
+    ],
+    ctx: fastmcp.Context
+):
+    l_types = types.split(',')
+    t_types = "/".join(
+        [
+            t_str.strip()
+            for t_str in l_types
+        ]
+    )
+    query = await build_graphql_query_nested.fn(
+        types=t_types,
+        ctx=ctx
+    )
+    return query
+    
 
 
 @mcp.tool(
@@ -878,10 +943,10 @@ output:
     tags={"graphql"}
 )
 async def ask_graphql_endpoint(
-    # query: typing.Annotated[str, "graphql query"],
-    # variables: typing.Annotated[dict, "variables for the graphql query"],
-    query: str,
-    variables: dict,
+    query: typing.Annotated[str, "graphql query"],
+    variables: typing.Annotated[dict, "variables for the graphql query"],
+    # query: str,
+    # variables: dict,
     ctx: fastmcp.Context
 ) -> ToolResult:
     gqlClient = ctx.get_state("gqlClient")
@@ -1004,10 +1069,10 @@ async def get_graphQL_data(
     )
 
     # dotaz (callback / mcp.sample) na LLM pro vyber dotcenych typu
-    llmresponse = await ctx.sample(
-        messages=prompt
-    )
-    print(f"get_graphQL_data.llmresponse: {llmresponse}")
+    
+    # llmresponse = await ctx.sample(messages=prompt)
+    llmresponse = await fallback_sample(messages=prompt)
+    print(f"get_graphQL_data.llmresponse: {llmresponse.text}")
     type_list = json.loads(llmresponse.text)
 
     assert isinstance(type_list, list), (
@@ -1128,13 +1193,14 @@ async def build_form(
     )
 
     # dotaz (callback / mcp.sample) na LLM pro vyber dotcenych typu
-    llmresponse = await ctx.sample(
-        messages=[
+    messages=[
             prompt,
             "\n\nUser message:\n\n"
             f"{user_message}"
-        ]
-    )
+    ]
+    # llmresponse = await ctx.sample(messages=messages)
+    llmresponse = await fallback_sample(messages=messages)
+        
     print(f"build_form.llmresponse: {llmresponse}")
     form_definition = json.loads(llmresponse.text)
     return ToolResult(
@@ -1303,8 +1369,7 @@ async def choose_link(
 
     # POZOR: tohle je callback na klienta, nikoli přímé volání LLM.
     # FastMCP Context typicky nabízí context.client.sample(...)
-    sample_res_str = await ctx.sample(
-        messages=[
+    messages=[
             {
                 "role": "system",
                 "content": [{"type": "text", "text": SYSTEM}],
@@ -1313,10 +1378,16 @@ async def choose_link(
                 "role": "user",
                 "content": [{"type": "text", "text": json.dumps(user_payload, ensure_ascii=False)}],
             },
-        ],
+        ]
+    # sample_res_str = await ctx.sample(
+    #     messages=messages,
+    #     temperature=0.2
+    # )    
+    sample_res_str = await fallback_sample(
+        messages=messages,
         temperature=0.2
     )    
-    result = json.loads(sample_res_str)
+    result = json.loads(sample_res_str.text)
     return ToolResult(
         content=TextContent(
             type="text",
@@ -1392,7 +1463,64 @@ async def createGQLClient(*, url: str = "http://localhost:33001/api/gql", userna
 
 # Připoj MCP router k umbrella app
 # app.include_router(mcp, prefix="/mcp")
-# mcp_app = mcp.http_app(path="/")
-mcp_app = mcp.sse_app(path="/")
+mcp_app = mcp.http_app(path="/")
+mcp_app_sse = mcp.sse_app(path="/")
 # mcp.sse_app()
 # v následujícím dotazu identifikuj datové entity, a podmínky, které mají splňovat. seznam datových entit (jejich odhadnuté názvy) uveď jako json list obsahující stringy - názvy seznam podmínek uveď jako json list obsahující dict např. {"name": {"_eq": "Pavel"}} pokud se jedná o podmínku v relaci, odpovídající dict je tento {"related_entity": {"attribute_name": {"_eq": "value"}}} v dict nikdy není použit klíč, který by sdružoval více názvů atributů dotaz: najdi mi všechny uživatele, kteří jsou členy katedry K209
+
+# C:\Users\admin\.dive\config
+
+# {
+#     "groups": [
+#         {
+#             "modelProvider": "openai_compatible",
+#             "models": [
+#                 {
+#                     "disableStreaming": false,
+#                     "active": true,
+#                     "toolsInPrompt": false,
+#                     "extra": {},
+#                     "model": "gpt-5-nano",
+#                     "isCustomModel": true,
+#                     "verifyStatus": "ignore"
+#                 },
+#                 {
+#                     "disableStreaming": false,
+#                     "active": true,
+#                     "toolsInPrompt": false,
+#                     "extra": {
+#                         "label": "GQL",
+#                         "customInstructions": "You are graphql expert. For response to user prompt prefer usage of available tools. Do not invent queries or data."
+#                     },
+#                     "model": "gpt-5-nano-gql",
+#                     "isCustomModel": true,
+#                     "verifyStatus": "ignore"
+#                 },
+#                 {
+#                     "disableStreaming": false,
+#                     "active": false,
+#                     "toolsInPrompt": false,
+#                     "extra": {},
+#                     "model": "gpt-azure",
+#                     "isCustomModel": false,
+#                     "verifyStatus": "unVerified"
+#                 }
+#             ],
+#             "extra": {
+#                 "active": true,
+#                 "skip_tls_verify": true
+#             },
+#             "maxTokens": null,
+#             "active": true,
+#             "apiKey": "sk-cokoliv",
+#             "baseURL": "http://localhost:8798"
+#         }
+#     ],
+#     "common": {
+#         "configuration": {
+#             "temperature": 0,
+#             "topP": 0
+#         }
+#     },
+#     "disableDiveSystemPrompt": false
+# }
