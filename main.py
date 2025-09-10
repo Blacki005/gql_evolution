@@ -240,7 +240,8 @@ nicegui.ui.run_with(
 # endregion
 
 # region mcp
-from main_mcp import mcp_app, mcp_app_sse, Client
+from fastmcp import Client
+from main_mcp import mcp_app, mcp_app_sse
 innerlifespan = mcp_app.lifespan
 
 app.mount(path="/mcp", app=mcp_app_sse)
