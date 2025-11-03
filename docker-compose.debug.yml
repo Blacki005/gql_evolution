@@ -59,7 +59,7 @@ services:
       - |
         SERVICES=
         [
-          {"name": "evolution", "url": "http://proxy:8000/gql"}
+          {"name": "evolution", "url": "http://host.docker.internal:8000/gql"},
           {"name": "ug", "url": "http://gql_ug:8000/gql"}
         ]       
     healthcheck:
