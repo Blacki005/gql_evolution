@@ -468,15 +468,15 @@ class EventMutation:
         ],
         extensions=[
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[UpdateError, EventGQLModel](
+            UserAccessControlExtension[InsertError, EventGQLModel](
                 roles=[
                     "plánovací administrátor", 
                     # "personalista"
                 ]
             ),
-            UserRoleProviderExtension[UpdateError, EventGQLModel](),
-            RbacProviderExtension[UpdateError, EventGQLModel](),
-            LoadDataExtension[UpdateError, EventGQLModel](
+            UserRoleProviderExtension[InsertError, EventGQLModel](),
+            RbacProviderExtension[InsertError, EventGQLModel](),
+            LoadDataExtension[InsertError, EventGQLModel](
                 getLoader=EventGQLModel.getLoader,
                 primary_key_name="masterevent_id"
             )
@@ -500,14 +500,14 @@ class EventMutation:
         ],
         extensions=[
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[UpdateError, EventGQLModel](
+            UserAccessControlExtension[InsertError, EventGQLModel](
                 roles=[
                     "plánovací administrátor", 
                     # "personalista"
                 ]
             ),
-            UserRoleProviderExtension[UpdateError, EventGQLModel](),
-            RbacInsertProviderExtension[UpdateError, EventGQLModel](
+            UserRoleProviderExtension[InsertError, EventGQLModel](),
+            RbacInsertProviderExtension[InsertError, EventGQLModel](
                 rbac_key_name="rbacobject_id"
             ),  
         ],
