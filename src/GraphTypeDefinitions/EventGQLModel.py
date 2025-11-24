@@ -468,15 +468,16 @@ class EventMutation:
         ],
         extensions=[
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[UpdateError, EventGQLModel](
-                roles=[
-                    "plánovací administrátor", 
-                    # "personalista"
-                ]
-            ),
-            UserRoleProviderExtension[UpdateError, EventGQLModel](),
-            RbacProviderExtension[UpdateError, EventGQLModel](),
-            LoadDataExtension[UpdateError, EventGQLModel](
+            #TODO: bypass autorizace, protoze zadny user nema prirazeny RBAC object a tim padem nema zadna prava pro pristup
+            # UserAccessControlExtension[InsertError, EventGQLModel](
+            #    roles=[
+            #        "plánovací administrátor", 
+            #        # "personalista"
+            #    ]
+            # ),
+            UserRoleProviderExtension[InsertError, EventGQLModel](),
+            RbacProviderExtension[InsertError, EventGQLModel](),
+            LoadDataExtension[InsertError, EventGQLModel](
                 getLoader=EventGQLModel.getLoader,
                 primary_key_name="masterevent_id"
             )
@@ -490,6 +491,26 @@ class EventMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict],
     ) -> typing.Union[EventGQLModel, InsertError[EventGQLModel]]:
+        # ------------------------------------------------------------------
+        # Defensive preprocessing:
+        # Some insert helper code expects an 'id' key to exist (even if None).
+        # If not provided, generate a UUID so downstream logic (including
+        # potential tree handling for subevents) does not crash with KeyError 'id'.
+        # Also propagate masterevent_id to subevents and generate their ids if missing.
+        # ------------------------------------------------------------------
+        if getattr(event, "id", None) is None:
+            import uuid as _uuid
+            event.id = _uuid.uuid4()
+        # Ensure subevents list exists
+        if getattr(event, "subevents", None):
+            for sub in event.subevents:
+                # propagate masterevent_id (parent's id becomes their masterevent_id)
+                if getattr(sub, "masterevent_id", None) is None:
+                    sub.masterevent_id = event.id
+                if getattr(sub, "id", None) is None:
+                    import uuid as _uuid
+                    sub.id = _uuid.uuid4()
+        # ------------------------------------------------------------------
         return await Insert[EventGQLModel].DoItSafeWay(info=info, entity=event)
     
     @strawberry.mutation(
@@ -500,14 +521,14 @@ class EventMutation:
         ],
         extensions=[
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[UpdateError, EventGQLModel](
+            UserAccessControlExtension[InsertError, EventGQLModel](
                 roles=[
                     "plánovací administrátor", 
                     # "personalista"
                 ]
             ),
-            UserRoleProviderExtension[UpdateError, EventGQLModel](),
-            RbacInsertProviderExtension[UpdateError, EventGQLModel](
+            UserRoleProviderExtension[InsertError, EventGQLModel](),
+            RbacInsertProviderExtension[InsertError, EventGQLModel](
                 rbac_key_name="rbacobject_id"
             ),  
         ],

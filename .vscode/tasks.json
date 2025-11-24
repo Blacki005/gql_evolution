@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run uvicorn to validate schema builds",
+			"type": "shell",
+			"command": "./.venv/bin/uvicorn main:app --reload --env-file environment.txt",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

@@ -28,6 +28,10 @@ class FragmentModel(BaseModel):
     path_attribute_name = "path"
 
     # Materialized path technique
+    #fragment - stromova struktura
+
+    #TODO: parent_id, children vztahy
+
     path: Mapped[str] = mapped_column(
         index=True,
         nullable=True,
@@ -39,7 +43,15 @@ class FragmentModel(BaseModel):
     vector: Mapped[typing.List[float]] = mapped_column(
         ARRAY(sqlalchemy.Float),
         nullable=True,
-        default=lambda: [0.0] * 1024
+        default=lambda: [0.0] * 1024 #TODO: je to 1024??
+    )
+
+    # text to be used for embedding (single large text field)
+    content: Mapped[str] = mapped_column(
+        sqlalchemy.Text,
+        nullable=True,
+        default=None,
+        comment="Plain text used to compute embeddings"
     )
 
 

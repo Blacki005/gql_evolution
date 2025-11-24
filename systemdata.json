@@ -10345,6 +10345,7 @@
             "created": "2024-08-11T21:45:06.685651",
             "lastchange": "2024-08-11T21:45:06.685651",
             "__typename": "FragmentGQLModel",
+            "content": "This is a sample fragment content used for testing purposes. It contains multiple sentences to simulate a realistic text input for embedding generation.",
             "createdby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "changedby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "vector": [
