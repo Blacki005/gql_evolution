@@ -37,6 +37,10 @@ from uoishelpers.gqlpermissions.UserAbsoluteAccessControlExtension import UserAb
 from .BaseGQLModel import BaseGQLModel, IDType, Relation
 from .TimeUnit import TimeUnit
 
+DocumentGQLModel = typing.Annotated["DocumentGQLModel", strawberry.lazy(".DocumentGQLModel")]
+DocumentInputFilter = typing.Annotated["DocumentInputFilter", strawberry.lazy(".DocumentGQLModel")]
+
+
 from txtai import Embeddings
 #local path to embedding model
 embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
@@ -44,8 +48,8 @@ embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
 @createInputs2
 class FragmentInputFilter:
     id: IDType
-    valid: bool
-
+    document_id: IDType
+    document: DocumentInputFilter = strawberry.field()
 
 @strawberry.federation.type(
     description="""Entity representing a Fragment of document""",
@@ -56,13 +60,22 @@ class FragmentGQLModel(BaseGQLModel):
     def getLoader(cls, info: strawberry.types.Info):
         return getLoadersFromInfo(info).FragmentModel
 
-    path: typing.Optional[str] = strawberry.field(
-        description="""Materialized path representing the group's hierarchical location.  
-Materializovaná cesta reprezentující umístění skupiny v hierarchii.""",
+    #TODO: tohle neni optional, upravit
+    document_id: typing.Optional[IDType] = strawberry.field(
+        description="""Document that the fragment belongs to""",
         default=None,
-        permission_classes=[OnlyForAuthentized]
+        permission_classes=[
+            OnlyForAuthentized
+        ]
     )
 
+    document: typing.Optional[DocumentGQLModel] = strawberry.field(
+        description="""Document that the fragment originates from""",
+        permission_classes=[
+            OnlyForAuthentized
+        ],
+        resolver=ScalarResolver[DocumentGQLModel](fkey_field_name="document_id")
+    )
 
     vector: typing.Optional[typing.List[float]] = strawberry.field(
         name="vector",
@@ -96,24 +109,6 @@ class FragmentQuery:
         permission_classes=[OnlyForAuthentized],
         resolver=PageResolver[FragmentGQLModel](whereType=FragmentInputFilter)
     )
-    #TODO: FRAGMENT input filter
-    #TODO: async funkce ktera vezme strukturu a spusti specificky sql dotaz nad ulozenymi radky
-    # pgvector - semanticke dotazy - specialni SELECT
-    #dekorovana async funkce
-    #vstup: dotazovany text - return vector of fragments
-    #primo sem
-    #TODO: documentGQLModel - ma n fragmentu, pri semantickem dotazu na fragment se vracci
-        # index nad dokumenty
-        # u fragmentu cizi klic dokumentID
-        # tabulka embeddeddocuments - konflikt s dokumentGQLModel ktery uz existuje
-    #TODO: embedding z dotazu - content povinny, embedding volitelny, kdyz nebude tak se pocita
-    #u open source modelu se musi obcas davat prefixy - pri ukladani do DB se ke content prida prefix
-    fragment_vector_search: typing.List[FragmentGQLModel] = strawberry.field(
-        description="""search fragments by vector similarity""",
-        permission_classes=[OnlyForAuthentized],
-        resolver=VectorResolver[FragmentGQLModel](fkey_field_name="vector", whereType=FragmentInputFilter)
-    )
-
 from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 @strawberry.input(
     description="""Input type for creating a Fragment"""
@@ -124,12 +119,13 @@ from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 class FragmentInsertGQLModel(InputModelMixin):
     getLoader = FragmentGQLModel.getLoader
 
-    content: str = strawberry.field(
-        description="""Text content to be embedded""",
+    document_id: typing.Optional[IDType] = strawberry.field(
+        description="""document id to which fragment belongs""",
+        default=None
     )
 
-    rbacobject_id: IDType = strawberry.field(
-        description="""Definitoin of access control"""
+    content: str = strawberry.field(
+        description="""Text content to be embedded""",
     )
 
     id: typing.Optional[IDType] = strawberry.field(
@@ -188,11 +184,12 @@ class FragmentDeleteGQLModel:
         description="""last change""",
     )
 
-@strawberry.interface(
+@strawberry.type(
     description="""Fragment mutations"""
 )
 class FragmentMutation:
-    @strawberry.mutation(
+    from .DocumentGQLModel import DocumentGQLModel
+    @strawberry.field(
         description="""Insert a Fragment""",
         permission_classes=[
             OnlyForAuthentized
@@ -207,16 +204,18 @@ class FragmentMutation:
                 ]
             ),
             UserRoleProviderExtension[InsertError, FragmentGQLModel](),
-            RbacInsertProviderExtension[InsertError, FragmentGQLModel](
-                rbac_key_name="rbacobject_id"    
-            ),
+            RbacProviderExtension[InsertError, FragmentGQLModel](),
+            LoadDataExtension[InsertError, FragmentGQLModel](
+                getLoader=DocumentGQLModel.getLoader,
+                primary_key_name="document_id"
+            )
         ],
     )
     async def fragment_insert(
         self,
         info: strawberry.Info,
         fragment: FragmentInsertGQLModel,
-        # db_row: typing.Any, #not sure why this was neccessary, maybe has something to do with the removed extension above
+        db_row: typing.Any, #not sure why this was neccessary, maybe has something to do with the removed extension above
         rbacobject_id: IDType,
         user_roles: typing.List[dict],
     ) -> typing.Union[FragmentGQLModel, InsertError[FragmentGQLModel]]:

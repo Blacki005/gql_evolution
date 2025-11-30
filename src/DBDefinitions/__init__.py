@@ -10,6 +10,7 @@ from .BaseModel import BaseModel
 from .EventDBModel import EventModel
 from .EventInvitationModel import EventInvitationModel
 from .FragmentDBModel import FragmentModel
+from .DocumentDBModel import DocumentModel
 
 async def startEngine(connectionstring, makeDrop=False, makeUp=True):
     """Provede nezbytne ukony a vrati asynchronni SessionMaker"""

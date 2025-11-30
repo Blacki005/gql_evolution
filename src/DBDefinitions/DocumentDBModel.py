@@ -15,7 +15,7 @@ from sqlalchemy.orm import relationship, column_property
 
 from .BaseModel import BaseModel, UUIDColumn, UUIDFKey, IDType
 from sqlalchemy.dialects.postgresql import ARRAY
-from pgvector.sqlalchemy import Vector
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 ###########################################################################################################################
 #
@@ -23,18 +23,18 @@ from pgvector.sqlalchemy import Vector
 # je-li treba, muzete definovat modely obsahujici jen id polozku, na ktere se budete odkazovat
 #
 ###########################################################################################################################
-class FragmentModel(BaseModel):
-    __tablename__ = "fragments_evolution"
+class DocumentModel(BaseModel):
+    __tablename__ = "documents_evolution"
 
     path_attribute_name = "path"
 
-    
-    #semantic vector, default is 1024 zeros
-    vector: Mapped[typing.List[float]] = mapped_column(
-        ARRAY(sqlalchemy.Float),
-        nullable=True,
-        default=lambda: [0.0] * 1024 #TODO: je to 1024??
-    )
+    fragments = relationship(
+        "FragmentModel",
+        uselist=True,
+        init=True,
+        cascade="save-update",
+        overlaps="document"
+    )  # assumes FragmentModel has document_id FK
 
     # text to be used for embedding (single large text field)
     content: Mapped[str] = mapped_column(
