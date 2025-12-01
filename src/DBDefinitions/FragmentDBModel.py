@@ -27,13 +27,28 @@ class FragmentModel(BaseModel):
     __tablename__ = "fragments_evolution"
 
     path_attribute_name = "path"
-
     
-    #semantic vector, default is 1024 zeros
+    # Semantic vector using pgvector - 384 dimensions for all-MiniLM-L6-v2
     vector: Mapped[typing.List[float]] = mapped_column(
-        ARRAY(sqlalchemy.Float),
+        Vector(384),  # all-MiniLM-L6-v2 produces 384-dimensional vectors
         nullable=True,
-        default=lambda: [0.0] * 1024 #TODO: je to 1024??
+        default=None,
+        comment="Semantic embedding vector for similarity search"
+    )
+
+    document_id: Mapped[typing.Optional[IDType]] = mapped_column(
+        ForeignKey("documents_evolution.id"),
+        default=None,
+        nullable=True,
+        index=True,
+        comment="Document that the fragment originates from."
+    )
+
+    # relation to the originating document
+    document = relationship(
+        "DocumentModel",
+        primaryjoin="FragmentModel.document_id==DocumentModel.id",
+        uselist=False,
     )
 
     # text to be used for embedding (single large text field)

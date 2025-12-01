@@ -109,6 +109,24 @@ class FragmentQuery:
         permission_classes=[OnlyForAuthentized],
         resolver=PageResolver[FragmentGQLModel](whereType=FragmentInputFilter)
     )
+    #TODO: FRAGMENT input filter
+    #TODO: async funkce ktera vezme strukturu a spusti specificky sql dotaz nad ulozenymi radky
+    # pgvector - semanticke dotazy - specialni SELECT
+    #dekorovana async funkce
+    #vstup: dotazovany text - return vector of fragments
+    #primo sem
+    #TODO: documentGQLModel - ma n fragmentu, pri semantickem dotazu na fragment se vracci
+        # index nad dokumenty
+        # u fragmentu cizi klic dokumentID
+        # tabulka embeddeddocuments - konflikt s dokumentGQLModel ktery uz existuje
+    #TODO: embedding z dotazu - content povinny, embedding volitelny, kdyz nebude tak se pocita
+    #u open source modelu se musi obcas davat prefixy - pri ukladani do DB se ke content prida prefix
+    fragment_vector_search: typing.List[FragmentGQLModel] = strawberry.field(
+        description="""search fragments by vector similarity""",
+        permission_classes=[OnlyForAuthentized],
+        resolver=VectorResolver[FragmentGQLModel](fkey_field_name="vector", whereType=FragmentInputFilter)
+    )
+
 from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 @strawberry.input(
     description="""Input type for creating a Fragment"""

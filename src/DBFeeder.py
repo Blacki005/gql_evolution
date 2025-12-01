@@ -23,8 +23,8 @@ async def initDB(asyncSessionMaker, filename="./systemdata.json"):
         dbModels = [
             EventModel, 
             EventInvitationModel,
-            FragmentModel,
-            DocumentModel
+            DocumentModel,  # Documents MUST come before Fragments due to FK constraint
+            FragmentModel
         ]
         
 

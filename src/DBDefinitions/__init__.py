@@ -17,6 +17,10 @@ async def startEngine(connectionstring, makeDrop=False, makeUp=True):
     asyncEngine = create_async_engine(connectionstring)
 
     async with asyncEngine.begin() as conn:
+        # Enable pgvector extension BEFORE creating tables
+        await conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector"))
+        print("pgvector extension enabled")
+        
         if makeDrop:
             await conn.run_sync(BaseModel.metadata.drop_all)
             print("BaseModel.metadata.drop_all finished")
