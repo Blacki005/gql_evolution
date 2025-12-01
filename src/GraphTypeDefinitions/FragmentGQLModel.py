@@ -119,7 +119,8 @@ class FragmentQuery:
         info: strawberry.types.Info,
         query_text: typing.Optional[str] = None,
         query_vector: typing.Optional[typing.List[float]] = None,
-        limit: int = 10
+        limit: int = 10,
+        threshold: float = 0.855
     ) -> typing.List[FragmentGQLModel]:
         """
         Search for fragments by semantic similarity.
@@ -128,9 +129,11 @@ class FragmentQuery:
             query_text: Text to search for (will be converted to embedding vector)
             query_vector: Pre-computed embedding vector (384 dimensions)
             limit: Maximum number of results to return
+            threshold: Maximum cosine distance for results (0=identical, 2=opposite).
+                      Default 0.5. Lower = stricter. Typical range: 0.3-0.7
             
         Returns:
-            List of fragments ordered by similarity (most similar first)
+            List of semantically related fragments (within threshold distance)
         """
         import sqlalchemy
         from src.DBDefinitions import FragmentModel
@@ -152,10 +155,11 @@ class FragmentQuery:
         
         # Execute vector similarity search using pgvector
         # Use pgvector's cosine distance operator (<=>)
-        # Order by distance (ascending = most similar first)
+        # Filter by threshold and order by distance (ascending = most similar first)
         stmt = (
             sqlalchemy.select(FragmentModel)
             .filter(FragmentModel.vector.isnot(None))  # Only search fragments with vectors
+            .filter(FragmentModel.vector.cosine_distance(search_vector) <= threshold)  # Apply threshold
             .order_by(FragmentModel.vector.cosine_distance(search_vector))  # pgvector operator
             .limit(limit)
         )

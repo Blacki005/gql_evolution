@@ -10345,7 +10345,13 @@
             "created":"2024-08-11T21:45:06.685651",
             "lastchange" : "2024-08-11T21:45:06.685651",
             "__typename" : "DocumentGQLModel",
-            "content" : "This is sample document content. It is longer than fragment content so it can be parted to individual fragments",
+            "title" : "Impact of Airplanes on Transportation",
+            "content" : "Cars and trains will never be the same after the invention of airplanes. The rapid advancement in aviation technology has revolutionized the way we perceive transportation. With the ability to soar through the skies, airplanes have drastically reduced travel time and connected distant parts of the world like never before. This has not only impacted personal travel but also transformed global trade and commerce, making it possible to transport goods quickly and efficiently across continents.",
+            "classification" : "Důvěrné",
+            "language" : "en",
+            "version" : "1.0",
+            "source_url" : "localhost:33001",
+            "author_id": "51d101a0-81f1-44ca-8366-6cf51432e8d6",
             "createdby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "changedby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "rbacobject_id" : "d75d64a4-bf5f-43c5-9c14-8fda7aff6c09"
@@ -10358,10 +10364,11 @@
             "created": "2024-08-11T21:45:06.685651",
             "lastchange": "2024-08-11T21:45:06.685651",
             "__typename": "FragmentGQLModel",
-            "content": "This is a sample fragment content used for testing purposes. It contains multiple sentences to simulate a realistic text input for embedding generation.",
+            "content": "Cars and trains will never be the same after the invention of airplanes.",
             "createdby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "changedby_id": "5968049d-1065-4caa-acb5-0c6fa15ae421",
             "document_id" : "a954c2a8-514e-4745-9e2f-4e60a944a709",
+            "rbacobject_id" : "d75d64a4-bf5f-43c5-9c14-8fda7aff6c09",
             "vector": null
         }
     ]
