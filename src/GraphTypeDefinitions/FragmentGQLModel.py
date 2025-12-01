@@ -109,23 +109,62 @@ class FragmentQuery:
         permission_classes=[OnlyForAuthentized],
         resolver=PageResolver[FragmentGQLModel](whereType=FragmentInputFilter)
     )
-    #TODO: FRAGMENT input filter
-    #TODO: async funkce ktera vezme strukturu a spusti specificky sql dotaz nad ulozenymi radky
-    # pgvector - semanticke dotazy - specialni SELECT
-    #dekorovana async funkce
-    #vstup: dotazovany text - return vector of fragments
-    #primo sem
-    #TODO: documentGQLModel - ma n fragmentu, pri semantickem dotazu na fragment se vracci
-        # index nad dokumenty
-        # u fragmentu cizi klic dokumentID
-        # tabulka embeddeddocuments - konflikt s dokumentGQLModel ktery uz existuje
-    #TODO: embedding z dotazu - content povinny, embedding volitelny, kdyz nebude tak se pocita
-    #u open source modelu se musi obcas davat prefixy - pri ukladani do DB se ke content prida prefix
-    fragment_vector_search: typing.List[FragmentGQLModel] = strawberry.field(
-        description="""search fragments by vector similarity""",
-        permission_classes=[OnlyForAuthentized],
-        resolver=VectorResolver[FragmentGQLModel](fkey_field_name="vector", whereType=FragmentInputFilter)
+
+    @strawberry.field(
+        description="""Search fragments by semantic similarity using vector embeddings""",
+        permission_classes=[OnlyForAuthentized]
     )
+    async def fragment_vector_search(
+        self,
+        info: strawberry.types.Info,
+        query_text: typing.Optional[str] = None,
+        query_vector: typing.Optional[typing.List[float]] = None,
+        limit: int = 10
+    ) -> typing.List[FragmentGQLModel]:
+        """
+        Search for fragments by semantic similarity.
+        
+        Args:
+            query_text: Text to search for (will be converted to embedding vector)
+            query_vector: Pre-computed embedding vector (384 dimensions)
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of fragments ordered by similarity (most similar first)
+        """
+        import sqlalchemy
+        from src.DBDefinitions import FragmentModel
+        
+        # Get database session from loader
+        loader = getLoadersFromInfo(info).FragmentModel
+        session = loader.session
+        
+        # Determine which vector to use for search
+        if query_text is not None:
+            # Generate embedding from text using all-MiniLM-L6-v2
+            search_vector = embeddings.transform(query_text)
+        elif query_vector is not None:
+            search_vector = query_vector
+        else:
+            # No input provided, return empty list
+            from graphql import GraphQLError
+            raise GraphQLError("Either 'query_text' or 'query_vector' must be provided for vector search")
+        
+        # Execute vector similarity search using pgvector
+        # Use pgvector's cosine distance operator (<=>)
+        # Order by distance (ascending = most similar first)
+        stmt = (
+            sqlalchemy.select(FragmentModel)
+            .filter(FragmentModel.vector.isnot(None))  # Only search fragments with vectors
+            .order_by(FragmentModel.vector.cosine_distance(search_vector))  # pgvector operator
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        
+        # Convert DB rows to GraphQL models using from_dataclass
+        return [FragmentGQLModel.from_dataclass(row) for row in rows]
+
 
 from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 @strawberry.input(
