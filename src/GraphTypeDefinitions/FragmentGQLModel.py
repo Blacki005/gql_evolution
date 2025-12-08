@@ -210,26 +210,18 @@ class FragmentUpdateGQLModel:
         description="""Event id""",
     )
 
-    #not needed, rbac is taken from DB row and compared to user roles
-    # rbacobject_id: IDType = strawberry.field(
-    #     description="""Definitoin of access control"""
-    # )
-
     content: typing.Optional[str] = strawberry.field(
         description="""Text content to be embedded""",
-        default=None,
+        default=strawberry.UNSET,
     )
 
     vector: typing.Optional[typing.List[float]] = strawberry.field(
         description="""Semantic vector, will be computed from content if not provided""",
-        default=None
+        default=strawberry.UNSET,
     )
 
-    # parent_id: typing.Optional[IDType] = strawberry.field(
-    #     description="""Event parent id""",
-    #     default=None
-    # )
     changedby_id: strawberry.Private[IDType] = None
+
     lastchange: datetime.datetime = strawberry.field(
         description="""last change""",
     )
@@ -328,6 +320,16 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[FragmentGQLModel, UpdateError[FragmentGQLModel]]:
+        #update fragment vector from content using embeddings.transform
+        try:
+            vec = embeddings.transform(fragment.content)
+            # handle both single vector or list-of-vectors - input arg je indexable
+            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
+                vec = vec[0]
+            fragment.vector = [float(x) for x in vec] if vec is not None else None
+        except Exception:
+            # on failure leave vector as-is (or None)
+            fragment.vector = getattr(fragment, "vector", None)
         return await Update[FragmentGQLModel].DoItSafeWay(info=info, entity=fragment)
     
 

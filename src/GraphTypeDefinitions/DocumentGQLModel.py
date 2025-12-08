@@ -146,6 +146,15 @@ from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
     description="""Input type for creating a document"""
 )
 
+#TODO:
+#fragmentujeme dokumenty po 1000 znacich
+#fragmenty (chunks) se maji prekryvat
+#pri vkladani dokumentu a pocitani embeddingu:
+#spustit async task na pozadi a dat odpoved serveru OK i kdyz chunks nejsou generovane
+#v te asynchronni funci musi byt await
+#knihovna pro embedingy ma snad async funkce - nejlepsi moznost
+#pokud to nema, mam 2 moznosti: bud to strcit do vedlejsiho vlakna (async execute on thread - sync fci poslat do vedlejsiho vlakna a udelat na ni await)
+#nebo vlozit await async sleep (neni to klasika, ale musi byt async, aby se predalo rizeni - jde tam (asi) dat i nula) - v tele funcke nastavit body, kdy se preda rizeni - kazdy chunk
 
 #pokud nejde o stromovou strukturu, tak tady musi byt InputModelMixin
 class DocumentInsertGQLModel(InputModelMixin):
@@ -167,7 +176,7 @@ class DocumentInsertGQLModel(InputModelMixin):
 
     classification: typing.Optional[str] = strawberry.field(
         description="""Classification of the document""",
-        default="bez klasifikace"
+        default="bez utajení"
     )
 
     language: typing.Optional[str] = strawberry.field(
@@ -305,6 +314,8 @@ class DocumentMutation:
         if getattr(Document, "id", None) is None:
             import uuid as _uuid
             Document.id = _uuid.uuid4()
+
+        # TODO: Trigger async task to generate document chunks and embeddings in the background
         return await Insert[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
     
 
