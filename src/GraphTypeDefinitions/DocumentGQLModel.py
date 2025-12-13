@@ -41,6 +41,69 @@ FragmentGQLModel = typing.Annotated["FragmentGQLModel", strawberry.lazy(".Fragme
 FragmentInputFilter = typing.Annotated["FragmentInputFilter", strawberry.lazy(".FragmentGQLModel")]
 UserGQLModel = typing.Annotated["UserGQLModel", strawberry.lazy(".UserGQLModel")]
 
+
+# Helper function for text fragmentation
+def split_into_sentences(text: str) -> typing.List[str]:
+    """Split text into sentences using basic punctuation rules."""
+    import re
+    # Split on sentence-ending punctuation followed by space or end of string
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
+def create_overlapping_chunks(
+    text: str, 
+    sentences_per_chunk: int = 10, 
+    overlap_sentences: int = 1
+) -> typing.List[str]:
+    """
+    Split text into overlapping chunks based on sentence count.
+    Much simpler than character-based chunking!
+    
+    Args:
+        text: Text to split
+        sentences_per_chunk: Number of sentences per chunk (default: 10)
+        overlap_sentences: Number of sentences to overlap (default: 1)
+    
+    Returns:
+        List of text chunks (each chunk is 10 sentences with 1 sentence overlap)
+    
+    Example:
+        Sentences: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12]
+        Chunk 1: S1-S10
+        Chunk 2: S10-S19  (S10 is the overlap)
+        Chunk 3: S19-S28  (S19 is the overlap)
+    """
+    if not text or not text.strip():
+        return []
+    
+    # Split text into sentences
+    sentences = split_into_sentences(text)
+    
+    if not sentences:
+        return [text]  # Fallback if no sentence splitting possible
+    
+    # If document has fewer sentences than chunk size, return as single chunk
+    if len(sentences) <= sentences_per_chunk:
+        return [' '.join(sentences)]
+    
+    chunks = []
+    i = 0
+    
+    while i < len(sentences):
+        # Take sentences_per_chunk sentences starting from position i
+        chunk_sentences = sentences[i:i + sentences_per_chunk]
+        
+        if chunk_sentences:  # Only add non-empty chunks
+            chunks.append(' '.join(chunk_sentences))
+        
+        # Move forward by (sentences_per_chunk - overlap_sentences)
+        # This creates the overlap
+        i += sentences_per_chunk - overlap_sentences
+    
+    return chunks
+
+
 @createInputs2
 class DocumentInputFilter:
     id: IDType
@@ -154,7 +217,7 @@ from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 #v te asynchronni funci musi byt await
 #knihovna pro embedingy ma snad async funkce - nejlepsi moznost
 #pokud to nema, mam 2 moznosti: bud to strcit do vedlejsiho vlakna (async execute on thread - sync fci poslat do vedlejsiho vlakna a udelat na ni await)
-#nebo vlozit await async sleep (neni to klasika, ale musi byt async, aby se predalo rizeni - jde tam (asi) dat i nula) - v tele funcke nastavit body, kdy se preda rizeni - kazdy chunk
+#nebo vlozit await async sleep (neni to klasika, ale musi byt async, aby se predalo rizeni - jde tam (asi) dat i nula) - v tele fce nastavit body, kdy se preda rizeni - kazdy chunk
 
 #pokud nejde o stromovou strukturu, tak tady musi byt InputModelMixin
 class DocumentInsertGQLModel(InputModelMixin):
@@ -278,6 +341,95 @@ class DocumentDeleteGQLModel:
         description="""last change""",
     )
 
+
+# Background task for generating document fragments with embeddings
+async def generate_document_fragments(
+    document_id: IDType,
+    content: str,
+    createdby_id: IDType,
+    info: strawberry.types.Info
+):
+    """
+    Background task to split document into fragments and generate embeddings.
+    Runs asynchronously without blocking the document insert response.
+    Uses direct database insertion with embedding computation.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from src.DBDefinitions import FragmentModel
+    from txtai import Embeddings
+    
+    print(f"[Background Task] Starting fragment generation for document {document_id}")
+    
+    # Load embedding model in thread
+    def compute_embedding(text: str) -> typing.List[float]:
+        """Compute embedding in a separate thread (blocking operation)."""
+        try:
+            embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
+            vec = embeddings.transform(text)
+            # Handle both single vector or list-of-vectors
+            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
+                vec = vec[0]
+            return [float(x) for x in vec] if vec is not None else None
+        except Exception as e:
+            print(f"[Background Task] Error computing embedding: {e}")
+            return None
+    
+    try:
+        # Split document into chunks (10 sentences per chunk, 1 sentence overlap)
+        #its not possible that there are no chunks, because content is required field
+        chunks = create_overlapping_chunks(content, sentences_per_chunk=10, overlap_sentences=1)        
+
+        # Get database session
+        loader = getLoadersFromInfo(info).FragmentModel
+        session = loader.session
+        
+        # Use ThreadPoolExecutor for CPU-bound embedding computation
+        executor = ThreadPoolExecutor(max_workers=1)
+        
+        fragments_created = 0
+        for idx, chunk_text in enumerate(chunks):
+            # Yield control to event loop
+            await asyncio.sleep(0)
+                        
+            # Compute embedding in separate thread (non-blocking)
+            loop = asyncio.get_event_loop()
+            vector = await loop.run_in_executor(executor, compute_embedding, chunk_text)
+            
+            if vector is None:
+                continue
+            
+            # Create fragment directly in database
+            import uuid as _uuid
+            fragment = FragmentModel(
+                id=_uuid.uuid4(),
+                document_id=document_id,
+                content=chunk_text,
+                vector=vector,
+                rbacobject_id=None,  # Fragments don't need separate RBAC, inherit from document
+                createdby_id=createdby_id,
+                changedby_id=createdby_id,
+                created=datetime.datetime.now(),
+                lastchange=datetime.datetime.now()
+            )
+            session.add(fragment)
+            fragments_created += 1
+            
+            # Yield control after each fragment
+            await asyncio.sleep(0)
+        
+        # Commit all fragments
+        await session.commit()
+        
+        executor.shutdown(wait=False)
+        
+    except Exception as e:
+        # Log error but don't fail the document insert
+        print(f"[Background Task] Error generating fragments for document {document_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 @strawberry.interface(
     description="""Document mutations"""
 )
@@ -310,13 +462,38 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict],
     ) -> typing.Union[DocumentGQLModel, InsertError[DocumentGQLModel]]:
+        import asyncio
+        from uoishelpers.resolvers import getUserFromInfo
+        
         # Auto-generate ID if not provided
         if getattr(Document, "id", None) is None:
             import uuid as _uuid
             Document.id = _uuid.uuid4()
-
-        # TODO: Trigger async task to generate document chunks and embeddings in the background
-        return await Insert[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
+        
+        # Get current user for createdby_id
+        user = getUserFromInfo(info)
+        createdby_id = user["id"]
+        
+        # Insert document first (must succeed before fragmenting)
+        result = await Insert[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
+        
+        # If insert failed, return the error
+        if isinstance(result, InsertError):
+            return result
+        
+        # Launch background task to generate fragments (non-blocking)
+        # This allows the mutation to return immediately while fragments are generated
+        if Document.content and Document.content.strip():
+            asyncio.create_task(
+                generate_document_fragments(
+                    document_id=Document.id,
+                    content=Document.content,
+                    createdby_id=createdby_id,
+                    info=info
+                )
+            )
+        
+        return result
     
 
     @strawberry.mutation(
@@ -403,5 +580,22 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Optional[DeleteError[DocumentGQLModel]]:
+        # Cascade delete: delete all fragments associated with this document first
+        from sqlalchemy import delete
+        from src.DBDefinitions import FragmentModel
+        
+        loaders = getLoadersFromInfo(info)
+        loader = loaders.FragmentModel
+        session = loader.session
+        
+        # Delete all fragments with this document_id
+        stmt = delete(FragmentModel).where(FragmentModel.document_id == Document.id)
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        deleted_count = result.rowcount
+        print(f"[Document Delete] Deleted {deleted_count} fragments for document {Document.id}")
+        
+        # Now delete the document itself
         return await Delete[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
     
