@@ -190,38 +190,38 @@ class EventInvitationDeleteGQLModel:
 )
 class EventInvitationMutation:
     from .EventGQLModel import EventGQLModel
-    @strawberry.field(
-        description="""Insert a EventInvitation""",
-        permission_classes=[
-            OnlyForAuthentized
-            # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
-        ],
-        extensions=[
-            # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[InsertError, EventInvitationGQLModel](
-                roles=[
-                    "plánovací administrátor", 
-                    # "personalista"
-                ]
-            ),
-            UserRoleProviderExtension[InsertError, EventInvitationGQLModel](),
-            RbacProviderExtension[InsertError, EventInvitationGQLModel](),
-            LoadDataExtension[InsertError, EventInvitationGQLModel](
-                getLoader=EventGQLModel.getLoader,
-                primary_key_name="event_id"
-            )
-        ],
-    )
-    async def event_invitation_insert(
-        self,
-        info: strawberry.types.Info,
-        invitation: EventInvitationInsertGQLModel,
-        db_row: typing.Any,
-        rbacobject_id: IDType,
-        user_roles: typing.List[dict],
-    ) -> typing.Union[EventInvitationGQLModel, InsertError[EventInvitationGQLModel]]:
-        # TODO check if invitation already exists and reject to invite that user again
-        return await Insert[EventInvitationGQLModel].DoItSafeWay(info=info, entity=invitation)
+    # @strawberry.field(
+    #     description="""Insert a EventInvitation""",
+    #     permission_classes=[
+    #         OnlyForAuthentized
+    #         # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
+    #     ],
+    #     extensions=[
+    #         # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
+    #         UserAccessControlExtension[InsertError, EventInvitationGQLModel](
+    #             roles=[
+    #                 "plánovací administrátor", 
+    #                 # "personalista"
+    #             ]
+    #         ),
+    #         UserRoleProviderExtension[InsertError, EventInvitationGQLModel](),
+    #         RbacProviderExtension[InsertError, EventInvitationGQLModel](),
+    #         LoadDataExtension[InsertError, EventInvitationGQLModel](
+    #             getLoader=EventGQLModel.getLoader,
+    #             primary_key_name="event_id"
+    #         )
+    #     ],
+    # )
+    # async def event_invitation_insert(
+    #     self,
+    #     info: strawberry.types.Info,
+    #     invitation: EventInvitationInsertGQLModel,
+    #     db_row: typing.Any,
+    #     rbacobject_id: IDType,
+    #     user_roles: typing.List[dict],
+    # ) -> typing.Union[EventInvitationGQLModel, InsertError[EventInvitationGQLModel]]:
+    #     # TODO check if invitation already exists and reject to invite that user again
+    #     return await Insert[EventInvitationGQLModel].DoItSafeWay(info=info, entity=invitation)
     
     @strawberry.field(
         description="""Allows invited user to accept or decline the invitation""",

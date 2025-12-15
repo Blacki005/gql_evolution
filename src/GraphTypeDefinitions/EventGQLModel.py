@@ -460,67 +460,73 @@ class EventDeleteGQLModel:
     description="""Event mutations"""
 )
 class EventMutation:
-    @strawberry.mutation(
-        description="""Insert a Event""",
-        permission_classes=[
-            OnlyForAuthentized
-            # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
-        ],
-        extensions=[
-            # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[InsertError, EventGQLModel](
-                roles=[
-                    "plánovací administrátor", 
-                    # "personalista"
-                ]
-            ),
-            UserRoleProviderExtension[InsertError, EventGQLModel](),
-            RbacProviderExtension[InsertError, EventGQLModel](),
-            LoadDataExtension[InsertError, EventGQLModel](
-                getLoader=EventGQLModel.getLoader,
-                primary_key_name="masterevent_id"
-            )
-        ],
-    )
-    async def event_insert(
+    # @strawberry.mutation(
+    #     description="""Insert a Event""",
+    #     permission_classes=[
+    #         OnlyForAuthentized
+    #         # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
+    #     ],
+    #     extensions=[
+    #         # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
+    #         UserAccessControlExtension[InsertError, EventGQLModel](
+    #             roles=[
+    #                 "plánovací administrátor", 
+    #                 # "personalista"
+    #             ]
+    #         ),
+    #         UserRoleProviderExtension[InsertError, EventGQLModel](),
+    #         RbacProviderExtension[InsertError, EventGQLModel](),
+    #         LoadDataExtension[InsertError, EventGQLModel](
+    #             getLoader=EventGQLModel.getLoader,
+    #             primary_key_name="masterevent_id"
+    #         )
+    #     ],
+    # )
+    # async def event_insert(
+    #     self,
+    #     info: strawberry.Info,
+    #     event: EventInsertGQLModel,
+    #     db_row: typing.Any,
+    #     rbacobject_id: IDType,
+    #     user_roles: typing.List[dict],
+    # ) -> typing.Union[EventGQLModel, InsertError[EventGQLModel]]:
+    #     return await Insert[EventGQLModel].DoItSafeWay(info=info, entity=event)
+    
+    # @strawberry.mutation(
+    #     description="""Insert a plan, it could be connected to master plan, rbacobject_id is id of group the plan is for""",
+    #     permission_classes=[
+    #         OnlyForAuthentized
+    #         # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
+    #     ],
+    #     extensions=[
+    #         # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
+    #         UserAccessControlExtension[InsertError, EventGQLModel](
+    #             roles=[
+    #                 "plánovací administrátor", 
+    #                 # "personalista"
+    #             ]
+    #         ),
+    #         UserRoleProviderExtension[InsertError, EventGQLModel](),
+    #         RbacInsertProviderExtension[InsertError, EventGQLModel](
+    #             rbac_key_name="rbacobject_id"
+    #         ),  
+    #     ],
+    # )
+    # async def event_create_plan(
+    #     self,
+    #     info: strawberry.Info,
+    #     event: EventPlanInsertGQLModel,
+    #     rbacobject_id: IDType,
+    #     user_roles: typing.List[dict],
+    # ) -> typing.Union[EventGQLModel, InsertError[EventGQLModel]]:
+    #     return await Insert[EventGQLModel].DoItSafeWay(info=info, entity=event)
+    
+    @strawberry.mutation
+    async def event_dummy_mutation(
         self,
         info: strawberry.Info,
-        event: EventInsertGQLModel,
-        db_row: typing.Any,
-        rbacobject_id: IDType,
-        user_roles: typing.List[dict],
-    ) -> typing.Union[EventGQLModel, InsertError[EventGQLModel]]:
-        return await Insert[EventGQLModel].DoItSafeWay(info=info, entity=event)
-    
-    @strawberry.mutation(
-        description="""Insert a plan, it could be connected to master plan, rbacobject_id is id of group the plan is for""",
-        permission_classes=[
-            OnlyForAuthentized
-            # SimpleInsertPermission[EventGQLModel](roles=["administrátor"])
-        ],
-        extensions=[
-            # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
-            UserAccessControlExtension[InsertError, EventGQLModel](
-                roles=[
-                    "plánovací administrátor", 
-                    # "personalista"
-                ]
-            ),
-            UserRoleProviderExtension[InsertError, EventGQLModel](),
-            RbacInsertProviderExtension[InsertError, EventGQLModel](
-                rbac_key_name="rbacobject_id"
-            ),  
-        ],
-    )
-    async def event_create_plan(
-        self,
-        info: strawberry.Info,
-        event: EventPlanInsertGQLModel,
-        rbacobject_id: IDType,
-        user_roles: typing.List[dict],
-    ) -> typing.Union[EventGQLModel, InsertError[EventGQLModel]]:
-        return await Insert[EventGQLModel].DoItSafeWay(info=info, entity=event)
-    
+    ) -> InsertError[EventGQLModel]:
+        return True
 
     @strawberry.mutation(
         description="""Update a Event""",
