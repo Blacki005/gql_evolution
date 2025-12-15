@@ -30,7 +30,7 @@ schema = strawberry.federation.Schema(
 
 from uoishelpers.schema import WhoAmIExtension, ProfilingExtension, PrometheusExtension
 schema.extensions.append(WhoAmIExtension)
-schema.extensions.append(ProfilingExtension)
+# schema.extensions.append(ProfilingExtension)
 schema.extensions.append(PrometheusExtension(prefix="GQL_Evolution"))
 
 from uoishelpers.gqlpermissions.RolePermissionSchemaExtension import RolePermissionSchemaExtension
