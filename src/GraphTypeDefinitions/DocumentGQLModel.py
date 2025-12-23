@@ -15,7 +15,6 @@ from uoishelpers.resolvers import (
     getLoadersFromInfo, 
     createInputs,
     createInputs2,
-
     InsertError, 
     Insert, 
     UpdateError, 
@@ -463,6 +462,7 @@ class DocumentMutation:
         user_roles: typing.List[dict],
     ) -> typing.Union[DocumentGQLModel, InsertError[DocumentGQLModel]]:
         import asyncio
+        import os
         from uoishelpers.resolvers import getUserFromInfo
         
         # Auto-generate ID if not provided
@@ -481,17 +481,29 @@ class DocumentMutation:
         if isinstance(result, InsertError):
             return result
         
-        # Launch background task to generate fragments (non-blocking)
-        # This allows the mutation to return immediately while fragments are generated
+        # Generate fragments synchronously in test mode, asynchronously in production
         if Document.content and Document.content.strip():
-            asyncio.create_task(
-                generate_document_fragments(
+            # Check if we're in test/sync mode
+            sync_mode = os.getenv("SYNC_FRAGMENT_GENERATION", "False").lower() in ("true", "1", "yes")
+            
+            if sync_mode:
+                # Synchronous mode: wait for fragments to be created (for tests)
+                await generate_document_fragments(
                     document_id=Document.id,
                     content=Document.content,
                     createdby_id=createdby_id,
                     info=info
                 )
-            )
+            else:
+                # Asynchronous mode: launch background task (for production)
+                asyncio.create_task(
+                    generate_document_fragments(
+                        document_id=Document.id,
+                        content=Document.content,
+                        createdby_id=createdby_id,
+                        info=info
+                    )
+                )
         
         return result
     
