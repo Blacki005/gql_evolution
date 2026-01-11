@@ -45,11 +45,30 @@ from txtai import Embeddings
 #local path to embedding model
 embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
 
+# Import error codes for consistent error handling
+from .error_codes import (
+    FRAGMENT_INSERT_NO_CONTENT,
+    FRAGMENT_INSERT_DOCUMENT_NOT_FOUND,
+    FRAGMENT_INSERT_EMBEDDING_FAILED,
+    FRAGMENT_INSERT_RBAC_MISSING,
+    FRAGMENT_UPDATE_EMBEDDING_FAILED,
+    FRAGMENT_DELETE_NOT_FOUND
+)
+
 @createInputs2
 class FragmentInputFilter:
-    id: IDType
+    content: str
     document_id: IDType
-    document: DocumentInputFilter = strawberry.field()
+    created: datetime.datetime
+    lastchange: datetime.datetime
+    id: IDType
+    valid: bool
+    document: DocumentInputFilter = strawberry.field(description="""Document filter operators, 
+for field "document" the filters could be
+{"document": {"title": {"_ilike": "%keyword%"}}}
+{"document": {"author_id": {"_eq": "ce22d5ab-f867-4cf1-8e3c-ee77eab81c24"}}}
+{"document": {"_and": [{"classification": {"_eq": "bez utajení"}}, {"language": {"_eq": "cs"}}]}}
+""")
 
 @strawberry.federation.type(
     description="""Entity representing a Fragment of document""",
@@ -252,8 +271,15 @@ class FragmentMutation:
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[InsertError, FragmentGQLModel](
                 roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                    "administrátor",
+                    "zpracovatel gdpr",
+                    "rektor",
+                    "prorektor",
+                    "děkan",
+                    "proděkan",
+                    "vedoucí katedry",
+                    "vedoucí učitel",
+                    "garant" 
                 ]
             ),
             UserRoleProviderExtension[InsertError, FragmentGQLModel](),
@@ -272,24 +298,69 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict],
     ) -> typing.Union[FragmentGQLModel, InsertError[FragmentGQLModel]]:
+        # Validace: Content nesmí být prázdný
+        if not fragment.content or not fragment.content.strip():
+            return InsertError[FragmentGQLModel](
+                _entity=None,
+                msg=FRAGMENT_INSERT_NO_CONTENT.msg,
+                code=FRAGMENT_INSERT_NO_CONTENT.code,
+                location=FRAGMENT_INSERT_NO_CONTENT.location,
+                _input=fragment
+            )
+        
+        # Validace: Dokument musí existovat (db_row načten přes LoadDataExtension)
+        if db_row is None:
+            return InsertError[FragmentGQLModel](
+                _entity=None,
+                msg=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.msg,
+                code=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.code,
+                location=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.location,
+                _input=fragment
+            )
+        
+        # Validace: RBAC object musí být přítomen
+        if rbacobject_id is None:
+            return InsertError[FragmentGQLModel](
+                _entity=db_row,
+                msg=FRAGMENT_INSERT_RBAC_MISSING.msg,
+                code=FRAGMENT_INSERT_RBAC_MISSING.code,
+                location=FRAGMENT_INSERT_RBAC_MISSING.location,
+                _input=fragment
+            )
+        
         # Auto-generate ID if not provided
         if getattr(fragment, "id", None) is None:
             import uuid as _uuid
             fragment.id = _uuid.uuid4()
-
-        # print("user_roles in fragment_insert:", user_roles)
-
         
-        # create vector from fragment.content using embeddings.transform
+        # Generování embedding vektoru z obsahu
         try:
             vec = embeddings.transform(fragment.content)
             # handle both single vector or list-of-vectors - input arg je indexable
             if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
                 vec = vec[0]
             fragment.vector = [float(x) for x in vec] if vec is not None else None
-        except Exception:
-            # on failure leave vector as-is (or None)
-            fragment.vector = getattr(fragment, "vector", None)
+        except Exception as e:
+            # Logování chyby při generování embeddingu
+            print(f"[Fragment Insert] Embedding generation failed: {e}")
+            return InsertError[FragmentGQLModel](
+                _entity=None,
+                msg=FRAGMENT_INSERT_EMBEDDING_FAILED.msg,
+                code=FRAGMENT_INSERT_EMBEDDING_FAILED.code,
+                location=FRAGMENT_INSERT_EMBEDDING_FAILED.location,
+                _input=fragment
+            )
+        
+        # Kontrola že embedding byl úspěšně vygenerován
+        if fragment.vector is None:
+            return InsertError[FragmentGQLModel](
+                _entity=None,
+                msg=FRAGMENT_INSERT_EMBEDDING_FAILED.msg,
+                code=FRAGMENT_INSERT_EMBEDDING_FAILED.code,
+                location=FRAGMENT_INSERT_EMBEDDING_FAILED.location,
+                _input=fragment
+            )
+        
         return await Insert[FragmentGQLModel].DoItSafeWay(info=info, entity=fragment)
     
 
@@ -303,8 +374,9 @@ class FragmentMutation:
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[UpdateError, FragmentGQLModel](
                 roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                    "administrátor",
+                    "děkan",
+                    "rektor"
                 ]
             ),
             UserRoleProviderExtension[UpdateError, FragmentGQLModel](),
@@ -320,16 +392,35 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[FragmentGQLModel, UpdateError[FragmentGQLModel]]:
-        #update fragment vector from content using embeddings.transform
-        try:
-            vec = embeddings.transform(fragment.content)
-            # handle both single vector or list-of-vectors - input arg je indexable
-            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
-                vec = vec[0]
-            fragment.vector = [float(x) for x in vec] if vec is not None else None
-        except Exception:
-            # on failure leave vector as-is (or None)
-            fragment.vector = getattr(fragment, "vector", None)
+        # Pokud je content poskytnut, aktualizuj embedding
+        if fragment.content is not strawberry.UNSET and fragment.content:
+            try:
+                vec = embeddings.transform(fragment.content)
+                # handle both single vector or list-of-vectors - input arg je indexable
+                if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
+                    vec = vec[0]
+                fragment.vector = [float(x) for x in vec] if vec is not None else None
+            except Exception as e:
+                # Logování chyby při aktualizaci embeddingu
+                print(f"[Fragment Update] Embedding update failed: {e}")
+                return UpdateError[FragmentGQLModel](
+                    _entity=db_row,
+                    msg=FRAGMENT_UPDATE_EMBEDDING_FAILED.msg,
+                    code=FRAGMENT_UPDATE_EMBEDDING_FAILED.code,
+                    location=FRAGMENT_UPDATE_EMBEDDING_FAILED.location,
+                    _input=fragment
+                )
+            
+            # Kontrola že embedding byl úspěšně aktualizován
+            if fragment.vector is None:
+                return UpdateError[FragmentGQLModel](
+                    _entity=db_row,
+                    msg=FRAGMENT_UPDATE_EMBEDDING_FAILED.msg,
+                    code=FRAGMENT_UPDATE_EMBEDDING_FAILED.code,
+                    location=FRAGMENT_UPDATE_EMBEDDING_FAILED.location,
+                    _input=fragment
+                )
+        
         return await Update[FragmentGQLModel].DoItSafeWay(info=info, entity=fragment)
     
 
@@ -344,8 +435,9 @@ class FragmentMutation:
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[DeleteError, FragmentGQLModel](
                 roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                    "administrátor",
+                    "děkan",
+                    "rektor"
                 ]
             ),
             UserRoleProviderExtension[DeleteError, FragmentGQLModel](),
@@ -361,5 +453,15 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Optional[DeleteError[FragmentGQLModel]]:
+        # Validace: Fragment musí existovat
+        if db_row is None:
+            return DeleteError[FragmentGQLModel](
+                _entity=None,
+                msg=FRAGMENT_DELETE_NOT_FOUND.msg,
+                code=FRAGMENT_DELETE_NOT_FOUND.code,
+                location=FRAGMENT_DELETE_NOT_FOUND.location,
+                _input=fragment
+            )
+        
         return await Delete[FragmentGQLModel].DoItSafeWay(info=info, entity=fragment)
     

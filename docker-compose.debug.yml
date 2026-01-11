@@ -112,7 +112,7 @@ services:
 
 
   postgres_gql:
-    image: postgres
+    image: pgvector/pgvector:pg18-trixie
     environment:
       # promenne, ktere lze cist v kontejneru
       - POSTGRES_USER=postgres

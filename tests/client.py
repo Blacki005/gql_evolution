@@ -30,9 +30,17 @@ Features:
 import aiohttp
 import asyncio
 import os
-import signal
-import subprocess
-import time
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Import error codes for validation
+from src.GraphTypeDefinitions.error_codes import (
+    DOCUMENT_INSERT_NO_CONTENT,
+    DOCUMENT_UPDATE_STALE_DATA,
+    FRAGMENT_INSERT_NO_CONTENT,
+)
 
 #default login constants:
 DEFAULT_USERNAME = "john.newbie@world.com"
@@ -434,17 +442,18 @@ async def test_document_crud():
         # ===== CREATE with missing content (should fail) =====
         print_test("Document CREATE (no content)", "INFO", "Attempting to create document without content...")
         
-        # Remove content from the vars to test validation
-        invalid_vars = {**create_vars}
-        del invalid_vars["content"]
+        # Test with empty content to trigger validation
+        invalid_vars = {**create_vars, "content": ""}
         
-        invalid_client = createFederationClient(DEFAULT_USERNAME, DEFAULT_PASSWORD)
-        invalid_result = await invalid_client(DOCUMENT_CREATE, invalid_vars)
+        invalid_result = await run_mutation(DOCUMENT_CREATE, invalid_vars)
+        error_data = invalid_result["data"]["DocumentInsert"]
         
-        # Should have GraphQL errors because content is required
-        if "errors" in invalid_result:
-            error_msg = invalid_result["errors"][0]["message"]
-            print_test("Document CREATE (no content)", "PASS", f"Correctly rejected with GraphQL error: '{error_msg[:60]}...'")
+        # Should return InsertError
+        assert error_data["__typename"] == "DocumentGQLModelInsertError", "Should return InsertError"
+        assert error_data["code"] == DOCUMENT_INSERT_NO_CONTENT.code, f"Expected error code {DOCUMENT_INSERT_NO_CONTENT.code}"
+        assert error_data["msg"] == DOCUMENT_INSERT_NO_CONTENT.msg, "Error message mismatch"
+        
+        print_test("Document CREATE (no content)", "PASS", f"Correctly rejected with code: {error_data['code'][:8]}...")
     
         # ===== READ (with fragments check) =====
         print_test("Document READ", "INFO", f"Reading document {doc_id[:8]}... and checking fragments")
@@ -495,8 +504,9 @@ async def test_document_crud():
         
         assert bad_update["__typename"] == "DocumentGQLModelUpdateError", "Should return error type"
         assert bad_update["failed"] == True, "Should have failed flag"
+        assert bad_update["code"] == DOCUMENT_UPDATE_STALE_DATA.code, f"Expected error code {DOCUMENT_UPDATE_STALE_DATA.code}"
         
-        print_test("Document UPDATE (invalid lastchange)", "PASS", f"Correctly rejected: {bad_update['msg'][:50]}...")
+        print_test("Document UPDATE (invalid lastchange)", "PASS", f"Correctly rejected with code: {bad_update['code'][:8]}...")
         
         # ===== UPDATE classification =====
         print_test("Document Classification UPDATE", "INFO", "Updating classification to 'confidential'...")
@@ -590,17 +600,18 @@ async def test_fragment_crud():
         # ===== CREATE with missing content (should fail) =====
         print_test("Fragment CREATE (no content)", "INFO", "Attempting to create fragment without content...")
         
-        # Remove content from the vars to test validation
-        invalid_vars = {**frag_vars}
-        del invalid_vars["content"]
+        # Test with empty content to trigger validation
+        invalid_vars = {**frag_vars, "content": ""}
         
-        invalid_client = createFederationClient(DEFAULT_USERNAME, DEFAULT_PASSWORD)
-        invalid_result = await invalid_client(FRAGMENT_CREATE, invalid_vars)
+        invalid_result = await run_mutation(FRAGMENT_CREATE, invalid_vars)
+        error_data = invalid_result["data"]["fragmentInsert"]
         
-        # Should have GraphQL errors because content is required
-        if "errors" in invalid_result:
-            error_msg = invalid_result["errors"][0]["message"]
-            print_test("Fragment CREATE (no content)", "PASS", f"Correctly rejected with GraphQL error: '{error_msg[:60]}...'")
+        # Should return InsertError
+        assert error_data["__typename"] == "FragmentGQLModelInsertError", "Should return InsertError"
+        assert error_data["code"] == FRAGMENT_INSERT_NO_CONTENT.code, f"Expected error code {FRAGMENT_INSERT_NO_CONTENT.code}"
+        assert error_data["msg"] == FRAGMENT_INSERT_NO_CONTENT.msg, "Error message mismatch"
+        
+        print_test("Fragment CREATE (no content)", "PASS", f"Correctly rejected with code: {error_data['code'][:8]}...")
     
 
         # ===== READ =====
@@ -648,6 +659,10 @@ async def test_fragment_crud():
         
         assert bad_frag["__typename"] == "FragmentGQLModelUpdateError", "Should return error"
         assert bad_frag["failed"] == True, "Should have failed"
+        # Note: Fragment update stale data validation is done by DoItSafeWay, not our custom code
+        # So it may not have the custom error code, but we still check it returns error
+        
+        print_test("Fragment UPDATE (invalid lastchange)", "PASS", f"Correctly rejected: {bad_frag['msg'][:50]}...")
         
         print_test("Fragment UPDATE (invalid lastchange)", "PASS", "Correctly rejected")
         
@@ -796,14 +811,12 @@ async def wait_for_server(url: str = f"http://localhost:{GQL_PORT}", timeout: in
     import time
     start_time = time.time()
     
-    print(f"{Colors.YELLOW}Waiting for server at {url}...{Colors.RESET}")
-    
     while time.time() - start_time < timeout:
         if await check_server_running(url):
-            print(f"{Colors.GREEN}✓ Server is ready{Colors.RESET}")
             return True
         await asyncio.sleep(0.5)
     
+    print(f"{Colors.RED}✗ Server did not start within {timeout} seconds{Colors.RESET}")
     raise TimeoutError(f"Server did not start within {timeout} seconds")
 
 
@@ -823,16 +836,15 @@ def stop_server():
         if result.stdout.strip():
             pids = result.stdout.strip().split('\n')
             for pid in pids:
-                print(f"{Colors.YELLOW}Stopping server (PID: {pid})...{Colors.RESET}")
                 os.kill(int(pid), signal.SIGTERM)
             
             # Wait a bit for graceful shutdown
             import time
             time.sleep(2)
-            print(f"{Colors.GREEN}✓ Server stopped{Colors.RESET}")
             return True
     except Exception as e:
-        print(f"{Colors.YELLOW}Note: Could not stop server - {e}{Colors.RESET}")
+        # Silently handle server stop failures
+        pass
     
     return False
 
@@ -852,19 +864,23 @@ def start_server():
     env = os.environ.copy()
     env["SYNC_FRAGMENT_GENERATION"] = "True"
     
-    print(f"{Colors.YELLOW}Starting server with SYNC_FRAGMENT_GENERATION=True...{Colors.RESET}")
-    
-    # Start server in background
-    process = subprocess.Popen(
-        [str(uvicorn_path), "main:app", "--reload", "--env-file", str(env_file)],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=str(project_root)
-    )
-    
-    print(f"{Colors.GREEN}✓ Server started (PID: {process.pid}){Colors.RESET}")
-    return process
+    # Start server in background with all output suppressed
+    try:
+        # Open devnull for complete output suppression
+        devnull = open(os.devnull, 'w')
+        process = subprocess.Popen(
+            [str(uvicorn_path), "main:app", "--reload", "--env-file", str(env_file)],
+            env=env,
+            stdout=devnull,
+            stderr=devnull,
+            stdin=subprocess.DEVNULL,
+            cwd=str(project_root),
+            start_new_session=True  # Detach from terminal
+        )
+        return process
+    except Exception as e:
+        print(f"{Colors.RED}✗ Failed to start server: {e}{Colors.RESET}")
+        raise
 
 
 if __name__ == "__main__":
@@ -872,18 +888,10 @@ if __name__ == "__main__":
     import asyncio
     
     async def run_tests():
-        # Check if server is running
-        print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*60}")
-        print(f"  SERVER SETUP")
-        print(f"{'='*60}{Colors.RESET}\n")
-        
+        # Silently check and manage server
         server_was_running = await check_server_running()
-        
         if server_was_running:
-            print(f"{Colors.YELLOW}Server is already running{Colors.RESET}")
             stop_server()
-        else:
-            print(f"{Colors.YELLOW}Server is not running{Colors.RESET}")
         
         # Start server with correct environment
         server_process = start_server()
@@ -895,10 +903,7 @@ if __name__ == "__main__":
         try:
             await main()
         finally:
-            # Optionally stop the server after tests
-            # Uncomment the following lines if you want to stop the server after tests:
-            print(f"\n{Colors.YELLOW}Stopping test server...{Colors.RESET}")
+            # Stop the server after tests
             stop_server()
-            pass
     
     asyncio.run(run_tests())

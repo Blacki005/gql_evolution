@@ -36,6 +36,14 @@ from uoishelpers.gqlpermissions.UserAbsoluteAccessControlExtension import UserAb
 from .BaseGQLModel import BaseGQLModel, IDType, Relation
 from .TimeUnit import TimeUnit
 
+# Import error codes for consistent error handling
+from .error_codes import (
+    DOCUMENT_INSERT_NO_CONTENT,
+    DOCUMENT_UPDATE_NOT_FOUND,
+    DOCUMENT_UPDATE_STALE_DATA,
+    DOCUMENT_DELETE_NOT_FOUND
+)
+
 FragmentGQLModel = typing.Annotated["FragmentGQLModel", strawberry.lazy(".FragmentGQLModel")]
 FragmentInputFilter = typing.Annotated["FragmentInputFilter", strawberry.lazy(".FragmentGQLModel")]
 UserGQLModel = typing.Annotated["UserGQLModel", strawberry.lazy(".UserGQLModel")]
@@ -105,8 +113,23 @@ def create_overlapping_chunks(
 
 @createInputs2
 class DocumentInputFilter:
+    title: str
+    content: str
+    classification: str
+    language: str
+    version: str
+    source_url: str
+    author_id: IDType
+    created: datetime.datetime
+    lastchange: datetime.datetime
     id: IDType
     valid: bool
+    fragments: FragmentInputFilter = strawberry.field(description="""Fragment filter operators, 
+for field "fragments" the filters could be
+{"fragments": {"content": {"_eq": "some text"}}}
+{"fragments": {"document_id": {"_eq": "ce22d5ab-f867-4cf1-8e3c-ee77eab81c24"}}}
+{"fragments": {"_and": [{"content": {"_ilike": "%keyword%"}}, {"valid": {"_eq": true}}]}}
+""")
 
 
 @strawberry.federation.type(
@@ -207,16 +230,6 @@ from uoishelpers.resolvers import TreeInputStructureMixin, InputModelMixin
 @strawberry.input(
     description="""Input type for creating a document"""
 )
-
-#TODO:
-#fragmentujeme dokumenty po 1000 znacich
-#fragmenty (chunks) se maji prekryvat
-#pri vkladani dokumentu a pocitani embeddingu:
-#spustit async task na pozadi a dat odpoved serveru OK i kdyz chunks nejsou generovane
-#v te asynchronni funci musi byt await
-#knihovna pro embedingy ma snad async funkce - nejlepsi moznost
-#pokud to nema, mam 2 moznosti: bud to strcit do vedlejsiho vlakna (async execute on thread - sync fci poslat do vedlejsiho vlakna a udelat na ni await)
-#nebo vlozit await async sleep (neni to klasika, ale musi byt async, aby se predalo rizeni - jde tam (asi) dat i nula) - v tele fce nastavit body, kdy se preda rizeni - kazdy chunk
 
 #pokud nejde o stromovou strukturu, tak tady musi byt InputModelMixin
 class DocumentInsertGQLModel(InputModelMixin):
@@ -386,6 +399,7 @@ async def generate_document_fragments(
         # Use ThreadPoolExecutor for CPU-bound embedding computation
         executor = ThreadPoolExecutor(max_workers=1)
         
+        expected_fragments = len(chunks)
         fragments_created = 0
         for idx, chunk_text in enumerate(chunks):
             # Yield control to event loop
@@ -416,10 +430,15 @@ async def generate_document_fragments(
             
             # Yield control after each fragment
             await asyncio.sleep(0)
-        
-        # Commit all fragments
-        await session.commit()
-        
+
+
+        # Commit only if all fragments were created successfully
+        if fragments_created == expected_fragments:
+            await session.commit()
+            print(f"[Background Task] Successfully created all {fragments_created} fragments for document {document_id}")
+        else:
+            await session.rollback()
+            print(f"[Background Task] Rollback: Only {fragments_created}/{expected_fragments} fragments created for document {document_id}")
         executor.shutdown(wait=False)
         
     except Exception as e:
@@ -443,8 +462,15 @@ class DocumentMutation:
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[InsertError, DocumentGQLModel](
                 roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                    "administrátor",
+                    "zpracovatel gdpr",
+                    "rektor",
+                    "prorektor",
+                    "děkan",
+                    "proděkan",
+                    "vedoucí katedry",
+                    "vedoucí učitel",
+                    "garant"  
                 ]
             ),
             UserRoleProviderExtension[InsertError, DocumentGQLModel](),
@@ -464,6 +490,16 @@ class DocumentMutation:
         import asyncio
         import os
         from uoishelpers.resolvers import getUserFromInfo
+        
+        # Validace: Content nesmí být prázdný
+        if not Document.content or not Document.content.strip():
+            return InsertError[DocumentGQLModel](
+                _entity=None,
+                msg=DOCUMENT_INSERT_NO_CONTENT.msg,
+                code=DOCUMENT_INSERT_NO_CONTENT.code,
+                location=DOCUMENT_INSERT_NO_CONTENT.location,
+                _input=Document
+            )
         
         # Auto-generate ID if not provided
         if getattr(Document, "id", None) is None:
@@ -517,9 +553,10 @@ class DocumentMutation:
         extensions=[
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[UpdateError, DocumentGQLModel](
-                roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                roles=[ 
+                    "administrátor",
+                    "děkan",
+                    "rektor"
                 ]
             ),
             UserRoleProviderExtension[UpdateError, DocumentGQLModel](),
@@ -535,6 +572,26 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[DocumentGQLModel, UpdateError[DocumentGQLModel]]:
+        # Validace: Dokument musí existovat
+        if db_row is None:
+            return UpdateError[DocumentGQLModel](
+                _entity=None,
+                msg=DOCUMENT_UPDATE_NOT_FOUND.msg,
+                code=DOCUMENT_UPDATE_NOT_FOUND.code,
+                location=DOCUMENT_UPDATE_NOT_FOUND.location,
+                _input=Document
+            )
+        
+        # Validace: Kontrola lastchange (optimistic locking)
+        if db_row.lastchange != Document.lastchange:
+            return UpdateError[DocumentGQLModel](
+                _entity=db_row,
+                msg=DOCUMENT_UPDATE_STALE_DATA.msg,
+                code=DOCUMENT_UPDATE_STALE_DATA.code,
+                location=DOCUMENT_UPDATE_STALE_DATA.location,
+                _input=Document
+            )
+        
         return await Update[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
     
 
@@ -546,7 +603,7 @@ class DocumentMutation:
         extensions=[
             UserAccessControlExtension[UpdateError, DocumentGQLModel](
                 roles=[
-                    "administrátor",  # Only administrators can update classification
+                    "administrátor",  
                 ]
             ),
             UserRoleProviderExtension[UpdateError, DocumentGQLModel](),
@@ -562,6 +619,26 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[DocumentGQLModel, UpdateError[DocumentGQLModel]]:
+        # Validace: Dokument musí existovat
+        if db_row is None:
+            return UpdateError[DocumentGQLModel](
+                _entity=None,
+                msg=DOCUMENT_UPDATE_NOT_FOUND.msg,
+                code=DOCUMENT_UPDATE_NOT_FOUND.code,
+                location=DOCUMENT_UPDATE_NOT_FOUND.location,
+                _input=Document
+            )
+        
+        # Validace: Kontrola lastchange (optimistic locking)
+        if db_row.lastchange != Document.lastchange:
+            return UpdateError[DocumentGQLModel](
+                _entity=db_row,
+                msg=DOCUMENT_UPDATE_STALE_DATA.msg,
+                code=DOCUMENT_UPDATE_STALE_DATA.code,
+                location=DOCUMENT_UPDATE_STALE_DATA.location,
+                _input=Document
+            )
+        
         return await Update[DocumentGQLModel].DoItSafeWay(info=info, entity=Document)
 
 
@@ -575,8 +652,9 @@ class DocumentMutation:
             # UpdatePermissionCheckRoleFieldExtension[GroupGQLModel](roles=["administrátor", "personalista"]),
             UserAccessControlExtension[DeleteError, DocumentGQLModel](
                 roles=[
-                    "plánovací administrátor", 
-                    "administrátor"
+                    "administrátor",
+                    "děkan",
+                    "rektor"
                 ]
             ),
             UserRoleProviderExtension[DeleteError, DocumentGQLModel](),
@@ -592,6 +670,16 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Optional[DeleteError[DocumentGQLModel]]:
+        # Validace: Dokument musí existovat
+        if db_row is None:
+            return DeleteError[DocumentGQLModel](
+                _entity=None,
+                msg=DOCUMENT_DELETE_NOT_FOUND.msg,
+                code=DOCUMENT_DELETE_NOT_FOUND.code,
+                location=DOCUMENT_DELETE_NOT_FOUND.location,
+                _input=Document
+            )
+        
         # Cascade delete: delete all fragments associated with this document first
         from sqlalchemy import delete
         from src.DBDefinitions import FragmentModel
