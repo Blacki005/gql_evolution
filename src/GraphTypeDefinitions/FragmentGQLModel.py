@@ -79,10 +79,10 @@ class FragmentGQLModel(BaseGQLModel):
     def getLoader(cls, info: strawberry.types.Info):
         return getLoadersFromInfo(info).FragmentModel
 
-    #TODO: tohle neni optional, upravit
+
     document_id: typing.Optional[IDType] = strawberry.field(
-        description="""Document that the fragment belongs to""",
         default=None,
+        description="""Document that the fragment belongs to""",
         permission_classes=[
             OnlyForAuthentized
         ]
@@ -98,8 +98,8 @@ class FragmentGQLModel(BaseGQLModel):
 
     vector: typing.Optional[typing.List[float]] = strawberry.field(
         name="vector",
-        default=lambda: [0.0] * 1024,
-        description="semantic vector, default is 1024 zeros",
+        default=None,
+        description="semantic vector, None if not computed",
         permission_classes=[
             OnlyForAuthentized
         ]
@@ -200,8 +200,8 @@ class FragmentInsertGQLModel(InputModelMixin):
     getLoader = FragmentGQLModel.getLoader
 
     document_id: typing.Optional[IDType] = strawberry.field(
+        default=None,
         description="""document id to which fragment belongs""",
-        default=None
     )
 
     content: str = strawberry.field(
@@ -453,15 +453,6 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Optional[DeleteError[FragmentGQLModel]]:
-        # Validace: Fragment musí existovat
-        if db_row is None:
-            return DeleteError[FragmentGQLModel](
-                _entity=None,
-                msg=FRAGMENT_DELETE_NOT_FOUND.msg,
-                code=FRAGMENT_DELETE_NOT_FOUND.code,
-                location=FRAGMENT_DELETE_NOT_FOUND.location,
-                _input=fragment
-            )
-        
+        # NOTE: db_row is None is already handled by LoadDataExtension
         return await Delete[FragmentGQLModel].DoItSafeWay(info=info, entity=fragment)
     

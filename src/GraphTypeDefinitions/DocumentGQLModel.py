@@ -87,9 +87,6 @@ def create_overlapping_chunks(
     # Split text into sentences
     sentences = split_into_sentences(text)
     
-    if not sentences:
-        return [text]  # Fallback if no sentence splitting possible
-    
     # If document has fewer sentences than chunk size, return as single chunk
     if len(sentences) <= sentences_per_chunk:
         return [' '.join(sentences)]
@@ -447,7 +444,6 @@ async def generate_document_fragments(
         import traceback
         traceback.print_exc()
 
-
 @strawberry.interface(
     description="""Document mutations"""
 )
@@ -572,16 +568,7 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[DocumentGQLModel, UpdateError[DocumentGQLModel]]:
-        # Validace: Dokument musí existovat
-        if db_row is None:
-            return UpdateError[DocumentGQLModel](
-                _entity=None,
-                msg=DOCUMENT_UPDATE_NOT_FOUND.msg,
-                code=DOCUMENT_UPDATE_NOT_FOUND.code,
-                location=DOCUMENT_UPDATE_NOT_FOUND.location,
-                _input=Document
-            )
-        
+        # NOTE: db_row is None is already handled by LoadDataExtension
         # Validace: Kontrola lastchange (optimistic locking)
         if db_row.lastchange != Document.lastchange:
             return UpdateError[DocumentGQLModel](
@@ -603,7 +590,7 @@ class DocumentMutation:
         extensions=[
             UserAccessControlExtension[UpdateError, DocumentGQLModel](
                 roles=[
-                    "administrátor",  
+                    "administrátor",
                 ]
             ),
             UserRoleProviderExtension[UpdateError, DocumentGQLModel](),
@@ -619,16 +606,7 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[DocumentGQLModel, UpdateError[DocumentGQLModel]]:
-        # Validace: Dokument musí existovat
-        if db_row is None:
-            return UpdateError[DocumentGQLModel](
-                _entity=None,
-                msg=DOCUMENT_UPDATE_NOT_FOUND.msg,
-                code=DOCUMENT_UPDATE_NOT_FOUND.code,
-                location=DOCUMENT_UPDATE_NOT_FOUND.location,
-                _input=Document
-            )
-        
+        # NOTE: db_row is None is already handled by LoadDataExtension
         # Validace: Kontrola lastchange (optimistic locking)
         if db_row.lastchange != Document.lastchange:
             return UpdateError[DocumentGQLModel](
@@ -670,16 +648,7 @@ class DocumentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Optional[DeleteError[DocumentGQLModel]]:
-        # Validace: Dokument musí existovat
-        if db_row is None:
-            return DeleteError[DocumentGQLModel](
-                _entity=None,
-                msg=DOCUMENT_DELETE_NOT_FOUND.msg,
-                code=DOCUMENT_DELETE_NOT_FOUND.code,
-                location=DOCUMENT_DELETE_NOT_FOUND.location,
-                _input=Document
-            )
-        
+        # NOTE: db_row is None is already handled by LoadDataExtension
         # Cascade delete: delete all fragments associated with this document first
         from sqlalchemy import delete
         from src.DBDefinitions import FragmentModel
