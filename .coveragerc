@@ -1,2 +1,3 @@
 [run]
-concurrency = gevent
+# Use thread for asyncio-based tests
+concurrency = thread
