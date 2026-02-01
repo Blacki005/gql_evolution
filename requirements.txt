@@ -21,3 +21,5 @@ pyjwt[crypto]
 pyinstrument
 prometheus_client
 https://github.com/hrbolek/uoishelpers/archive/refs/heads/main.zip
+
+txtai

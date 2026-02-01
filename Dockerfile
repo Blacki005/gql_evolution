@@ -2,7 +2,14 @@
 FROM python:3.10.13-slim AS prepare
 
 # instalace curl, aby bylo mozne zprovoznit standardni healthcheck
-RUN apt update && apt install curl -y && rm -rf /var/cache/apk/*
+# Install system dependencies needed for txtai and other ML libraries
+RUN apt update && apt install -y \
+    curl \
+    build-essential \
+    gcc \
+    g++ \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8000
 
