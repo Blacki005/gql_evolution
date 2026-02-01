@@ -8,7 +8,7 @@ on:
       docker_version_tag:
         description: 'Extra tag for docker image (version tag)'
         required: true
-        default: '0.8.6'
+        default: '0.0.1'
 
 jobs:
   push_to_registry:
