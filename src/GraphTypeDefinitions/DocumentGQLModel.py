@@ -38,10 +38,7 @@ from .TimeUnit import TimeUnit
 
 # Import error codes for consistent error handling
 from .error_codes import (
-    DOCUMENT_INSERT_NO_CONTENT,
-    DOCUMENT_UPDATE_NOT_FOUND,
-    DOCUMENT_UPDATE_STALE_DATA,
-    DOCUMENT_DELETE_NOT_FOUND
+    DOCUMENT_UPDATE_STALE_DATA
 )
 
 FragmentGQLModel = typing.Annotated["FragmentGQLModel", strawberry.lazy(".FragmentGQLModel")]
@@ -54,6 +51,9 @@ def split_into_sentences(text: str) -> typing.List[str]:
     """Split text into sentences using basic punctuation rules."""
     import re
     # Split on sentence-ending punctuation followed by space or end of string
+    # Regex explanation: (?<=[.!?]) = positive lookbehind for sentence endings
+    # \s+ = one or more whitespace characters after the punctuation
+    # This preserves the punctuation in the sentence while splitting on whitespace
     sentences = re.split(r'(?<=[.!?])\s+', text)
     return [s.strip() for s in sentences if s.strip()]
 
@@ -377,11 +377,18 @@ async def generate_document_fragments(
     
     # Load embedding model in thread
     def compute_embedding(text: str) -> typing.List[float]:
-        """Compute embedding in a separate thread (blocking operation)."""
+        """Compute embedding in a separate thread (blocking operation).
+        
+        This function runs in a ThreadPoolExecutor to avoid blocking the async event loop
+        since txtai's embedding computation is CPU-intensive and synchronous.
+        """
         try:
+            # Initialize txtai embeddings model - this is expensive but necessary for each thread
             embeddings = Embeddings(path=MODEL_PATH)
             vec = embeddings.transform(text)
-            # Handle both single vector or list-of-vectors
+            
+            # Handle both single vector or list-of-vectors returned by txtai
+            # Sometimes transform() returns [[vec]] instead of [vec]
             if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
                 vec = vec[0]
             return [float(x) for x in vec] if vec is not None else None
@@ -404,10 +411,12 @@ async def generate_document_fragments(
         expected_fragments = len(chunks)
         fragments_created = 0
         for idx, chunk_text in enumerate(chunks):
-            # Yield control to event loop
+            # Yield control to event loop before processing each chunk
+            # This prevents blocking other async operations during bulk processing
             await asyncio.sleep(0)
                         
             # Compute embedding in separate thread (non-blocking)
+            # run_in_executor moves CPU-intensive embedding computation off the main thread
             loop = asyncio.get_event_loop()
             vector = await loop.run_in_executor(executor, compute_embedding, chunk_text)
             
@@ -415,6 +424,7 @@ async def generate_document_fragments(
                 continue
             
             # Create fragment directly in database
+            # Each fragment gets a unique ID and inherits access control from parent document
             import uuid as _uuid
             fragment = FragmentModel(
                 id=_uuid.uuid4(),
@@ -427,14 +437,15 @@ async def generate_document_fragments(
                 created=datetime.datetime.now(),
                 lastchange=datetime.datetime.now()
             )
-            session.add(fragment)
+            session.add(fragment)  # Add to session but don't commit yet
             fragments_created += 1
             
-            # Yield control after each fragment
+            # Yield control after each fragment to maintain responsiveness
             await asyncio.sleep(0)
 
 
-        # Commit only if all fragments were created successfully
+        # All-or-nothing transaction: commit only if all fragments were created successfully
+        # This ensures data consistency - either all fragments are created or none are
         if fragments_created == expected_fragments:
             await session.commit()
             print(f"[Background Task] Successfully created all {fragments_created} fragments for document {document_id}")
@@ -492,16 +503,6 @@ class DocumentMutation:
         import os
         from uoishelpers.resolvers import getUserFromInfo
         
-        # Validace: Content nesmí být prázdný
-        if not Document.content or not Document.content.strip():
-            return InsertError[DocumentGQLModel](
-                _entity=None,
-                msg=DOCUMENT_INSERT_NO_CONTENT.msg,
-                code=DOCUMENT_INSERT_NO_CONTENT.code,
-                location=DOCUMENT_INSERT_NO_CONTENT.location,
-                _input=Document
-            )
-        
         # Auto-generate ID if not provided
         if getattr(Document, "id", None) is None:
             import uuid as _uuid
@@ -519,12 +520,16 @@ class DocumentMutation:
             return result
         
         # Generate fragments synchronously in test mode, asynchronously in production
+        # This dual-mode approach allows:
+        # 1. Tests to wait for fragment creation and verify results
+        # 2. Production to return immediately while fragments are generated in background
         if Document.content and Document.content.strip():
-            # Check if we're in test/sync mode
+            # Check if we're in test/sync mode via environment variable
             sync_mode = os.getenv("SYNC_FRAGMENT_GENERATION", "False").lower() in ("true", "1", "yes")
             
             if sync_mode:
                 # Synchronous mode: wait for fragments to be created (for tests)
+                # This blocks until all fragments are processed, allowing test verification
                 await generate_document_fragments(
                     document_id=Document.id,
                     content=Document.content,
@@ -533,6 +538,7 @@ class DocumentMutation:
                 )
             else:
                 # Asynchronous mode: launch background task (for production)
+                # Fire-and-forget: document insert returns immediately, fragments created later
                 asyncio.create_task(
                     generate_document_fragments(
                         document_id=Document.id,
@@ -655,6 +661,8 @@ class DocumentMutation:
     ) -> typing.Optional[DeleteError[DocumentGQLModel]]:
         # NOTE: db_row is None is already handled by LoadDataExtension
         # Cascade delete: delete all fragments associated with this document first
+        # Manual cascade is needed because fragments contain expensive-to-compute embeddings
+        # and we want to ensure they're properly cleaned up before document deletion
         from sqlalchemy import delete
         from src.DBDefinitions import FragmentModel
         
@@ -662,7 +670,8 @@ class DocumentMutation:
         loader = loaders.FragmentModel
         session = loader.session
         
-        # Delete all fragments with this document_id
+        # Delete all fragments with this document_id using bulk delete for efficiency
+        # This is more efficient than loading each fragment individually
         stmt = delete(FragmentModel).where(FragmentModel.document_id == Document.id)
         result = await session.execute(stmt)
         await session.commit()

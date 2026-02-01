@@ -66,6 +66,7 @@ Implementováno vyhledávání pomocí **kosinové vzdálenosti** mezi embedding
 # pgvector operátor pro kosinovou vzdálenost
 FragmentModel.vector.cosine_distance(search_vector) <= threshold
 ```
+Jako threshold se při testování osvědčila hodnota 0.855, kde sémantické vyhledávání vrací i vzdáleněji relevantní fragmenty, což je vhodné pro uživatele v akademickém prostředí.
 
 ---
 
@@ -198,18 +199,3 @@ Přidán workflow pro automatické publikování Docker image:
 - **CI/CD:** GitHub Actions + Docker Hub
 
 ---
-
-## Závěr
-
-Projekt úspěšně implementuje:
-- ✅ CRUD operace pro dokumenty a fragmenty
-- ✅ Automatická fragmentace dokumentů
-- ✅ Sémantické vyhledávání pomocí vektorových embeddingů
-- ✅ Autorizace a oprávnění
-- ✅ CI/CD pipeline pro Docker
-
-Hlavní výzvou zůstává správné měření code coverage při integračních testech přes HTTP.
-
----
-
-*Poslední aktualizace: 1. února 2026*

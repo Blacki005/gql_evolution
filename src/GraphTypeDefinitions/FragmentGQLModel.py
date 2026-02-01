@@ -1,19 +1,13 @@
-import asyncio
-import dataclasses
 import datetime
 import typing
 import strawberry
 
 import strawberry.types
 from uoishelpers.gqlpermissions import (
-    OnlyForAuthentized,
-    SimpleInsertPermission, 
-    SimpleUpdatePermission, 
-    SimpleDeletePermission
+    OnlyForAuthentized
 )    
 from uoishelpers.resolvers import (
-    getLoadersFromInfo, 
-    createInputs,
+    getLoadersFromInfo,
     createInputs2,
 
     InsertError, 
@@ -24,18 +18,14 @@ from uoishelpers.resolvers import (
     Delete,
 
     PageResolver,
-    VectorResolver,
     ScalarResolver
 )
 from uoishelpers.gqlpermissions.LoadDataExtension import LoadDataExtension
 from uoishelpers.gqlpermissions.RbacProviderExtension import RbacProviderExtension
-from uoishelpers.gqlpermissions.RbacInsertProviderExtension import RbacInsertProviderExtension
 from uoishelpers.gqlpermissions.UserRoleProviderExtension import UserRoleProviderExtension
 from uoishelpers.gqlpermissions.UserAccessControlExtension import UserAccessControlExtension
-from uoishelpers.gqlpermissions.UserAbsoluteAccessControlExtension import UserAbsoluteAccessControlExtension
 
-from .BaseGQLModel import BaseGQLModel, IDType, Relation
-from .TimeUnit import TimeUnit
+from .BaseGQLModel import BaseGQLModel, IDType
 
 DocumentGQLModel = typing.Annotated["DocumentGQLModel", strawberry.lazy(".DocumentGQLModel")]
 DocumentInputFilter = typing.Annotated["DocumentInputFilter", strawberry.lazy(".DocumentGQLModel")]
@@ -50,16 +40,16 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 MODEL_PATH = os.path.join(PROJECT_ROOT, "all-MiniLM-L6-v2")
 
 # Initialize embeddings with absolute path to local model
+# IMPORTANT: This creates a global embeddings instance loaded at module import time
+# Pros: Fast access, model loaded once, thread-safe for read operations
+# Cons: Uses memory even if not used, slow startup, potential issues in multiprocessing
+# The model (all-MiniLM-L6-v2) produces 384-dimensional vectors
 embeddings = Embeddings(path=MODEL_PATH)
 
 # Import error codes for consistent error handling
 from .error_codes import (
-    FRAGMENT_INSERT_NO_CONTENT,
-    FRAGMENT_INSERT_DOCUMENT_NOT_FOUND,
     FRAGMENT_INSERT_EMBEDDING_FAILED,
-    FRAGMENT_INSERT_RBAC_MISSING,
     FRAGMENT_UPDATE_EMBEDDING_FAILED,
-    FRAGMENT_DELETE_NOT_FOUND
 )
 
 @createInputs2
@@ -169,25 +159,29 @@ class FragmentQuery:
         session = loader.session
         
         # Determine which vector to use for search
+        # Either convert text to embedding or use provided vector directly
         if query_text is not None:
             # Generate embedding from text using all-MiniLM-L6-v2
+            # This produces a 384-dimensional vector for semantic comparison
             search_vector = embeddings.transform(query_text)
         elif query_vector is not None:
+            # Use pre-computed vector (must be 384 dimensions for compatibility)
             search_vector = query_vector
         else:
             # No input provided, return empty list
             from graphql import GraphQLError
             raise GraphQLError("Either 'query_text' or 'query_vector' must be provided for vector search")
         
-        # Execute vector similarity search using pgvector
-        # Use pgvector's cosine distance operator (<=>)
-        # Filter by threshold and order by distance (ascending = most similar first)
+        # Execute vector similarity search using pgvector extension
+        # pgvector's cosine distance: 0 = identical vectors, 2 = opposite vectors
+        # Lower threshold = stricter matching (more similar results)
+        # Higher threshold = looser matching (more diverse results)
         stmt = (
             sqlalchemy.select(FragmentModel)
             .filter(FragmentModel.vector.isnot(None))  # Only search fragments with vectors
-            .filter(FragmentModel.vector.cosine_distance(search_vector) <= threshold)  # Apply threshold
-            .order_by(FragmentModel.vector.cosine_distance(search_vector))  # pgvector operator
-            .limit(limit)
+            .filter(FragmentModel.vector.cosine_distance(search_vector) <= threshold)  # Apply similarity threshold
+            .order_by(FragmentModel.vector.cosine_distance(search_vector))  # Order by similarity (most similar first)
+            .limit(limit)  # Limit number of results
         )
         result = await session.execute(stmt)
         rows = result.scalars().all()
@@ -305,50 +299,32 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict],
     ) -> typing.Union[FragmentGQLModel, InsertError[FragmentGQLModel]]:
-        # Validace: Content nesmí být prázdný
-        if not fragment.content or not fragment.content.strip():
-            return InsertError[FragmentGQLModel](
-                _entity=None,
-                msg=FRAGMENT_INSERT_NO_CONTENT.msg,
-                code=FRAGMENT_INSERT_NO_CONTENT.code,
-                location=FRAGMENT_INSERT_NO_CONTENT.location,
-                _input=fragment
-            )
-        
-        # Validace: Dokument musí existovat (db_row načten přes LoadDataExtension)
-        if db_row is None:
-            return InsertError[FragmentGQLModel](
-                _entity=None,
-                msg=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.msg,
-                code=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.code,
-                location=FRAGMENT_INSERT_DOCUMENT_NOT_FOUND.location,
-                _input=fragment
-            )
-        
-        # Validace: RBAC object musí být přítomen
-        if rbacobject_id is None:
-            return InsertError[FragmentGQLModel](
-                _entity=db_row,
-                msg=FRAGMENT_INSERT_RBAC_MISSING.msg,
-                code=FRAGMENT_INSERT_RBAC_MISSING.code,
-                location=FRAGMENT_INSERT_RBAC_MISSING.location,
-                _input=fragment
-            )
-        
         # Auto-generate ID if not provided
         if getattr(fragment, "id", None) is None:
             import uuid as _uuid
             fragment.id = _uuid.uuid4()
         
-        # Generování embedding vektoru z obsahu
+        # Generate embedding vector from text content using txtai
+        # The global embeddings model transforms text into 384-dimensional vectors
         try:
             vec = embeddings.transform(fragment.content)
-            # handle both single vector or list-of-vectors - input arg je indexable
+            
+            # Handle txtai's inconsistent return formats:
+            # Sometimes returns: [vector] (list containing one vector)
+            # Sometimes returns: [[vector]] (nested list)
+            # We need just the vector itself: [float, float, ...]
             if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
-                vec = vec[0]
+                vec = vec[0]  # Extract the inner vector from nested structure
+                
+            # Convert to list of floats for database storage (pgvector format)
             fragment.vector = [float(x) for x in vec] if vec is not None else None
+            
         except Exception as e:
-            # Logování chyby při generování embeddingu
+            # Embedding generation can fail due to:
+            # - Model loading issues
+            # - Out of memory
+            # - Invalid text input
+            # - txtai library errors
             print(f"[Fragment Insert] Embedding generation failed: {e}")
             return InsertError[FragmentGQLModel](
                 _entity=None,
@@ -358,7 +334,8 @@ class FragmentMutation:
                 _input=fragment
             )
         
-        # Kontrola že embedding byl úspěšně vygenerován
+        # Final validation: Ensure embedding was successfully generated
+        # Without a valid vector, the fragment cannot be used for semantic search
         if fragment.vector is None:
             return InsertError[FragmentGQLModel](
                 _entity=None,
@@ -399,16 +376,21 @@ class FragmentMutation:
         rbacobject_id: IDType,
         user_roles: typing.List[dict]
     ) -> typing.Union[FragmentGQLModel, UpdateError[FragmentGQLModel]]:
-        # Pokud je content poskytnut, aktualizuj embedding
+        # Conditional embedding update: only regenerate vector if content changed
+        # This avoids expensive re-computation when only metadata is updated
         if fragment.content is not strawberry.UNSET and fragment.content:
             try:
+                # Regenerate embedding with same logic as insert
                 vec = embeddings.transform(fragment.content)
-                # handle both single vector or list-of-vectors - input arg je indexable
+                
+                # Handle txtai's variable return format (same as insert logic)
                 if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):
                     vec = vec[0]
+                    
                 fragment.vector = [float(x) for x in vec] if vec is not None else None
+                
             except Exception as e:
-                # Logování chyby při aktualizaci embeddingu
+                # Log embedding update failure - this is non-fatal but important to track
                 print(f"[Fragment Update] Embedding update failed: {e}")
                 return UpdateError[FragmentGQLModel](
                     _entity=db_row,
@@ -418,7 +400,8 @@ class FragmentMutation:
                     _input=fragment
                 )
             
-            # Kontrola že embedding byl úspěšně aktualizován
+            # Ensure embedding update was successful
+            # If content was provided but embedding failed, this is a critical error
             if fragment.vector is None:
                 return UpdateError[FragmentGQLModel](
                     _entity=db_row,

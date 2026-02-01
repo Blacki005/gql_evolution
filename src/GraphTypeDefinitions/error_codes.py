@@ -10,7 +10,6 @@ Struktura:
 - msg: Lidsky čitelný popis chyby
 - location: Název mutace/operace kde může nastat
 """
-
 import typing
 from dataclasses import dataclass
 
@@ -27,17 +26,6 @@ class ErrorCode:
 # DOCUMENT ERROR CODES
 # ============================================
 
-DOCUMENT_INSERT_NO_CONTENT = ErrorCode(
-    code="a1b2c3d4-1111-4001-8001-000000000001",
-    msg="Document content cannot be empty",
-    location="Document_insert"
-)
-
-DOCUMENT_INSERT_INVALID_URL = ErrorCode(
-    code="a1b2c3d4-1111-4001-8001-000000000002",
-    msg="Invalid source URL format",
-    location="Document_insert"
-)
 
 DOCUMENT_INSERT_UNAUTHORIZED = ErrorCode(
     code="a1b2c3d4-1111-4001-8001-000000000003",
@@ -49,12 +37,6 @@ DOCUMENT_INSERT_RBAC_MISSING = ErrorCode(
     code="a1b2c3d4-1111-4001-8001-000000000004",
     msg="RBAC object not found or access denied",
     location="Document_insert"
-)
-
-DOCUMENT_UPDATE_NOT_FOUND = ErrorCode(
-    code="a1b2c3d4-2222-4002-8002-000000000011",
-    msg="Document not found",
-    location="Document_update"
 )
 
 DOCUMENT_UPDATE_STALE_DATA = ErrorCode(
@@ -81,21 +63,9 @@ DOCUMENT_UPDATE_CLASSIFICATION_UNAUTHORIZED = ErrorCode(
     location="Document_update_classification"
 )
 
-DOCUMENT_DELETE_NOT_FOUND = ErrorCode(
-    code="a1b2c3d4-3333-4003-8003-000000000021",
-    msg="Document not found",
-    location="Document_delete"
-)
-
 DOCUMENT_DELETE_UNAUTHORIZED = ErrorCode(
     code="a1b2c3d4-3333-4003-8003-000000000022",
     msg="You are not authorized to delete this document",
-    location="Document_delete"
-)
-
-DOCUMENT_DELETE_HAS_FRAGMENTS = ErrorCode(
-    code="a1b2c3d4-3333-4003-8003-000000000023",
-    msg="Cannot delete document with existing fragments. Delete fragments first.",
     location="Document_delete"
 )
 
@@ -107,12 +77,6 @@ DOCUMENT_DELETE_HAS_FRAGMENTS = ErrorCode(
 FRAGMENT_INSERT_NO_CONTENT = ErrorCode(
     code="b1c2d3e4-1111-4101-8101-000000000001",
     msg="Fragment content cannot be empty",
-    location="fragment_insert"
-)
-
-FRAGMENT_INSERT_DOCUMENT_NOT_FOUND = ErrorCode(
-    code="b1c2d3e4-1111-4101-8101-000000000002",
-    msg="Document not found. Cannot create fragment for non-existent document.",
     location="fragment_insert"
 )
 
@@ -132,12 +96,6 @@ FRAGMENT_INSERT_RBAC_MISSING = ErrorCode(
     code="b1c2d3e4-1111-4101-8101-000000000005",
     msg="RBAC object not found or access denied",
     location="fragment_insert"
-)
-
-FRAGMENT_UPDATE_NOT_FOUND = ErrorCode(
-    code="b1c2d3e4-2222-4102-8102-000000000011",
-    msg="Fragment not found",
-    location="fragment_update"
 )
 
 FRAGMENT_UPDATE_STALE_DATA = ErrorCode(

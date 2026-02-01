@@ -56,6 +56,8 @@ services:
     environment:
       # promenne, ktere lze cist v kontejneru
       # SERVICES je json array popisujici jednotlive dostupne sluzby
+      # Spusteni primo v apollo: {"name": "evolution", "url": "http://gql_document:8000/gql"},
+      # {"name": "evolution", "url": "http://host.docker.internal:8000/gql"},
       - PORT=3000
       - |
         SERVICES=
@@ -165,9 +167,19 @@ services:
       - 31122:80
 
   gql_document:
-    image: blacki005/gql_evolution:0.0.2
-    restart: on-failure:3
+    image: gql_document:with-pgvector
     ports:
       - 33013:8000  # External port 33013 maps to internal port 8000
     depends_on:
       - postgres_gql
+    environment:
+      - POSTGRES_HOST=postgres_gql:5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=example
+      - POSTGRES_DB=data
+      - DEMO=False
+      - DEMODATA=False
+      - 'DEMOUSER={"id": "2d9dc5ca-a4a2-11ed-b9df-0242ac120003", "name": "John", "surname": "Newbie"}'
+      - JWTPUBLICKEYURL=http://localhost:33001/oauth/publickey
+      - JWTRESOLVEUSERPATHURL=http://localhost:33001/oauth/userinfo
+      - GQLUG_ENDPOINT_URL=http://localhost:33001/api/gql
