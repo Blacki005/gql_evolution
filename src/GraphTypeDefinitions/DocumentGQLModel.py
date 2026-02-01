@@ -364,17 +364,22 @@ async def generate_document_fragments(
     Uses direct database insertion with embedding computation.
     """
     import asyncio
+    import os
     from concurrent.futures import ThreadPoolExecutor
     from src.DBDefinitions import FragmentModel
     from txtai import Embeddings
     
     print(f"[Background Task] Starting fragment generation for document {document_id}")
     
+    # Get the project root directory (where main.py is located)
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    MODEL_PATH = os.path.join(PROJECT_ROOT, "all-MiniLM-L6-v2")
+    
     # Load embedding model in thread
     def compute_embedding(text: str) -> typing.List[float]:
         """Compute embedding in a separate thread (blocking operation)."""
         try:
-            embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
+            embeddings = Embeddings(path=MODEL_PATH)
             vec = embeddings.transform(text)
             # Handle both single vector or list-of-vectors
             if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], (list, tuple)):

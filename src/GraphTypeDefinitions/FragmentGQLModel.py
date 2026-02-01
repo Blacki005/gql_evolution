@@ -42,8 +42,15 @@ DocumentInputFilter = typing.Annotated["DocumentInputFilter", strawberry.lazy(".
 
 
 from txtai import Embeddings
-#local path to embedding model
-embeddings = Embeddings(path="/home/filip/all-MiniLM-L6-v2")
+import os
+
+# Get the project root directory (where main.py is located)
+# This works both locally and in Docker container
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+MODEL_PATH = os.path.join(PROJECT_ROOT, "all-MiniLM-L6-v2")
+
+# Initialize embeddings with absolute path to local model
+embeddings = Embeddings(path=MODEL_PATH)
 
 # Import error codes for consistent error handling
 from .error_codes import (
